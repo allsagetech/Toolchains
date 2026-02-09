@@ -1,8 +1,15 @@
-$global:PwrPackageConfig = @{
+<#
+Toolchains
+Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+Copyright (c) 2026 AllSageTech
+SPDX-License-Identifier: MPL-2.0
+#>
+
+$global:TlcPackageConfig = @{
 	Name = 'task'
 }
 
-function global:Install-PwrPackage {
+function global:Install-TlcPackage {
 	$Params = @{
 		Owner = 'go-task'
 		Repo = 'task'
@@ -10,9 +17,9 @@ function global:Install-PwrPackage {
 		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
 	}
 	$Asset = Get-GitHubRelease @Params
-	$PwrPackageConfig.UpToDate = -not $Asset.Version.LaterThan($PwrPackageConfig.Latest)
-	$PwrPackageConfig.Version = $Asset.Version.ToString()
-	if ($PwrPackageConfig.UpToDate) {
+	$TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $Asset.Version.ToString()
+	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
 	$Params = @{
@@ -20,15 +27,15 @@ function global:Install-PwrPackage {
 		AssetURL = $Asset.URL
 	}
 	Install-BuildTool @Params
-	Write-PackageVars @{
+	Write-TlcVars @{
 		env = @{
 			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'task.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
-function global:Test-PwrPackageInstall {
-	Airpower exec 'file:///\pkg' {
+function global:Test-TlcPackageInstall {
+	Toolchain exec (Get-TlcPkgUri) {
 		task --version
 	}
 }

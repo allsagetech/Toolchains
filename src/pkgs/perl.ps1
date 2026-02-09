@@ -1,9 +1,16 @@
-$global:PwrPackageConfig = @{
+<#
+Toolchains
+Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+Copyright (c) 2026 AllSageTech
+SPDX-License-Identifier: MPL-2.0
+#>
+
+$global:TlcPackageConfig = @{
 	Name = 'perl'
 }
 
-function global:Install-PwrPackage {
-	$List = (Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/StrawberryPerl/strawberryperl.com/gh-pages/releases.json').Content | ConvertFrom-Json
+function global:Install-TlcPackage {
+	$List = (Invoke-TlcWebRequest -Uri 'https://raw.githubusercontent.com/StrawberryPerl/strawberryperl.com/gh-pages/releases.json').Content | ConvertFrom-Json
 	foreach ($Item in $List) {
 		if ($Item.archname -eq 'MSWin32-x64-multi-thread') {
 			$Version = $Item.version
@@ -12,10 +19,10 @@ function global:Install-PwrPackage {
 				AssetName = $AssetName
 				AssetURL = $Item.edition.portable.url
 			}
-			$v = [SemanticVersion]::new($Version, '^([0-9]+)\.([0-9]+)\.([0-9]+)(\.[0-9]+)')
-			$PwrPackageConfig.UpToDate = -not $v.LaterThan($PwrPackageConfig.Latest)
-			$PwrPackageConfig.Version = $v.ToString()
-			if ($PwrPackageConfig.UpToDate) {
+			$v = [TlcSemanticVersion]::new($Version, '^([0-9]+)\.([0-9]+)\.([0-9]+)(\.[0-9]+)')
+			$TlcPackageConfig.UpToDate = -not $v.LaterThan($TlcPackageConfig.Latest)
+			$TlcPackageConfig.Version = $v.ToString()
+			if ($TlcPackageConfig.UpToDate) {
 				return
 			}
 			Install-BuildTool @Params
@@ -23,7 +30,7 @@ function global:Install-PwrPackage {
 			if (-not (Test-Path $MakeDirectory\make.exe)) {
 				New-Item -ItemType HardLink $MakeDirectory\make.exe -Target $MakeDirectory\gmake.exe
 			}
-			Write-PackageVars @{
+			Write-TlcVars @{
 				env = @{
 					path = (@(
 						(Get-ChildItem -Path '\pkg' -Recurse -Include 'perl.exe' | Select-Object -First 1).DirectoryName,
@@ -37,6 +44,6 @@ function global:Install-PwrPackage {
 	Write-Error "Failed to find an x64 build for StrawberryPerl"
 }
 
-function global:Test-PwrPackageInstall {
-	Get-Content '\pkg\.pwr'
+function global:Test-TlcPackageInstall {
+	Get-Content '\pkg\.tlc'
 }

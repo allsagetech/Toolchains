@@ -1,17 +1,24 @@
-$global:PwrPackageConfig = @{
+<#
+Toolchains
+Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+Copyright (c) 2026 AllSageTech
+SPDX-License-Identifier: MPL-2.0
+#>
+
+$global:TlcPackageConfig = @{
 	Name = 'jom'
 }
 
-function global:Install-PwrPackage {
+function global:Install-TlcPackage {
 	$Params = @{
 		Owner = 'qt-labs'
 		Repo = 'jom'
 		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
 	}
 	$Latest = Get-GitHubTag @Params
-	$PwrPackageConfig.UpToDate = -not $Latest.Version.LaterThan($PwrPackageConfig.Latest)
-	$PwrPackageConfig.Version = $Latest.Version.ToString()
-	if ($PwrPackageConfig.UpToDate) {
+	$TlcPackageConfig.UpToDate = -not $Latest.Version.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $Latest.Version.ToString()
+	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
 	$Tag = $Latest.name
@@ -22,13 +29,13 @@ function global:Install-PwrPackage {
 		AssetURL = "http://qt.mirror.constant.com/official_releases/jom/$AssetName"
 	}
 	Install-BuildTool @Params
-	Write-PackageVars @{
+	Write-TlcVars @{
 		env = @{
 			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'jom.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
-function global:Test-PwrPackageInstall {
-	Get-Content '\pkg\.pwr'
+function global:Test-TlcPackageInstall {
+	Get-Content '\pkg\.tlc'
 }

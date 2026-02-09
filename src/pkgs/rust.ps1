@@ -1,17 +1,24 @@
-$global:PwrPackageConfig = @{
+<#
+Toolchains
+Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+Copyright (c) 2026 AllSageTech
+SPDX-License-Identifier: MPL-2.0
+#>
+
+$global:TlcPackageConfig = @{
 	Name = 'rust'
 }
 
-function global:Install-PwrPackage {
+function global:Install-TlcPackage {
 	$params = @{
 		Owner = 'rust-lang'
 		Repo = 'rust'
 		TagPattern = '^([0-9]+)\.([0-9]+)\.([0-9]+)$'
 	}
 	$latest = Get-GitHubTag @params
-	$global:PwrPackageConfig.UpToDate = -not $latest.Version.LaterThan($global:PwrPackageConfig.Latest)
-	$global:PwrPackageConfig.Version = $latest.Version.ToString()
-	if ($global:PwrPackageConfig.UpToDate) {
+	$global:TlcPackageConfig.UpToDate = -not $latest.Version.LaterThan($global:TlcPackageConfig.Latest)
+	$global:TlcPackageConfig.Version = $latest.Version.ToString()
+	if ($global:TlcPackageConfig.UpToDate) {
 		return
 	}
 	Write-Host 'setting environment variables for installation'
@@ -24,7 +31,7 @@ function global:Install-PwrPackage {
 	Write-Host "Path=$env:Path"
 	Write-Host 'downloading rustup-init'
 	$init = "$env:Temp\rustup-init.exe"
-	Invoke-WebRequest 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $init -UseBasicParsing
+	Invoke-TlcWebRequest -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $init
 	Write-Host "installing rust $($latest.Version)"
 	& $init --version
 	if ($LASTEXITCODE -ne 0) {
@@ -49,7 +56,7 @@ function global:Install-PwrPackage {
 	if ($LASTEXITCODE -ne 0) {
 		throw "rustup toolchain install $($latest.Version) exit code $LASTEXITCODE"
 	}
-	Write-PackageVars @{
+	Write-TlcVars @{
 		env = @{
 			cargo_home = '\pkg\.cargo'
 			rustup_home = '\pkg\.rustup'
@@ -58,12 +65,12 @@ function global:Install-PwrPackage {
 	}
 }
 
-function global:Test-PwrPackageInstall {
-	if (-not $global:PwrPackageConfig.Version) {
+function global:Test-TlcPackageInstall {
+	if (-not $global:TlcPackageConfig.Version) {
 		throw 'missing package version'
 	}
-	$wantver = "rustc $($global:PwrPackageConfig.Version) "
-	Airpower exec 'file:///\pkg' {
+	$wantver = "rustc $($global:TlcPackageConfig.Version) "
+	Toolchain exec (Get-TlcPkgUri) {
 		$rustver = & rustc.exe --version
 		if ($LASTEXITCODE -ne 0) {
 			throw "rustc version exit code $LASTEXITCODE"

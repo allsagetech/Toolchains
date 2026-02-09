@@ -1,0 +1,268 @@
+# <#
+# Toolchain
+# Copyright (c) 2026 AllSageTech
+# SPDX-License-Identifier: MPL-2.0
+# #>
+
+name: Build Toolchain Packages
+
+on:
+  push:
+  schedule:
+    - cron: '9 2 */4 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  init:
+    runs-on: windows-2022
+    outputs:
+      matrix: ${{ steps.init.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Toolchain module
+        shell: pwsh
+        env:
+          TOOLCHAIN_REPO: allsagetech/toolchain
+          TOOLCHAIN_REF: pipeline
+          GH_TOKEN: ${{ github.token }}
+        run: .\scripts\install-toolchain.ps1
+
+      - name: Analyze packages
+        id: init
+        shell: pwsh
+        env:
+          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          . .\src\main.ps1
+          Save-WorkflowMatrix
+
+          $raw = Get-Content .matrix -Raw
+          $obj = $raw | ConvertFrom-Json
+
+          if ($null -eq $obj.package -or $obj.package.Count -eq 0) {
+            Write-Host "Save-WorkflowMatrix returned 0 packages; falling back to all scripts in .\src\pkgs\"
+            $all = Get-ChildItem -Path .\src\pkgs\ -Filter *.ps1 -Recurse |
+              ForEach-Object { $_.FullName.Replace((Get-Location).Path, '.') }
+            $raw = (ConvertTo-Json @{ package = @($all) } -Compress)
+          }
+
+          "matrix=$raw" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+  build:
+    needs: init
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.init.outputs.matrix) }}
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+      TLC_PKG_ROOT: D:\pkg
+      TLC_COSIGN_SIGN: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Set up Java (required for SonarScanner 8.x)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Verify Java
+        shell: pwsh
+        run: |
+          java -version
+          Write-Host "JAVA_HOME=$env:JAVA_HOME"
+
+      - name: Ensure cache directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: D:\pkg\cache
+          key: tlc-cache-${{ runner.os }}-${{ github.ref_name }}-${{ hashFiles('src/util.ps1', 'src/pkgs/**') }}
+          restore-keys: |
+            tlc-cache-${{ runner.os }}-${{ github.ref_name }}-
+            tlc-cache-${{ runner.os }}-
+
+      - name: Install Toolchain module
+        shell: pwsh
+        env:
+          TOOLCHAIN_REPO: allsagetech/toolchain
+          TOOLCHAIN_REF: pipeline
+          GH_TOKEN: ${{ github.token }}
+        run: .\scripts\install-toolchain.ps1
+
+      - name: Install Cosign (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = 'v2.6.0'
+          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-windows-amd64.exe"
+          $installDir = "$env:ProgramFiles\cosign"
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile "$installDir\cosign.exe"
+          # Ensure cosign is on PATH for subsequent steps
+          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Run ${{ matrix.package }}
+        id: pkg
+        shell: pwsh
+        env:
+          TLC_PKG_ROOT: D:\pkg
+          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $scriptRel = '${{ matrix.package }}'
+          $isVsBuildTools = $scriptRel -match 'vs-buildtools\.ps1$'
+
+          if ($isVsBuildTools) {
+            if (Test-Path $env:TLC_PKG_ROOT) { Remove-Item -Recurse -Force $env:TLC_PKG_ROOT }
+          } else {
+            if (Test-Path $env:TLC_PKG_ROOT) {
+              Get-ChildItem -LiteralPath $env:TLC_PKG_ROOT -Force |
+                Where-Object { $_.Name -ne 'cache' } |
+                Remove-Item -Recurse -Force
+            } else {
+              New-Item -ItemType Directory -Path $env:TLC_PKG_ROOT -Force | Out-Null
+            }
+            New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
+          }
+
+          if (Test-Path $env:TLC_PKG_ROOT) {
+            if (Test-Path 'C:\pkg') { Remove-Item -Recurse -Force 'C:\pkg' }
+            cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
+          }
+
+          . .\src\main.ps1
+          Clear-TlcPackageScript
+
+          $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
+          Invoke-TlcScript $scriptPath
+
+          "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Scan package
+        if: ${{ steps.pkg.outputs.up-to-date == 'False' }}
+        shell: pwsh
+        env:
+          TLC_PKG_ROOT: D:\pkg
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'C:\pkg')) {
+            cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
+          }
+          . .\src\main.ps1
+          Invoke-TlcPackageScan
+
+      - name: Build and push container
+        if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && steps.pkg.outputs.up-to-date == 'False' }}
+        shell: pwsh
+        env:
+          TLC_PKG_ROOT: D:\pkg
+          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'C:\pkg')) {
+            cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
+          }
+          . .\src\main.ps1
+          Invoke-DockerPush '${{ steps.pkg.outputs.name }}' '${{ steps.pkg.outputs.version }}'
+
+      - name: Trigger Toolchain contract tests
+        continue-on-error: true
+        if: ${{ github.ref == 'refs/heads/main' && steps.pkg.outputs.up-to-date == 'False' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLCHAIN_CONTRACT_TOKEN: ${{ secrets.TOOLCHAIN_CONTRACT_TOKEN }}
+          TOOLCHAIN_REPO: allsagetech/toolchain
+          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $token = if ($env:TOOLCHAIN_CONTRACT_TOKEN) { $env:TOOLCHAIN_CONTRACT_TOKEN } else { $env:GH_TOKEN }
+          if (-not $token) {
+            Write-Host 'No GitHub token available; skipping contract dispatch.'
+            exit 0
+          }
+
+          $name    = '${{ steps.pkg.outputs.name }}'
+          $version = '${{ steps.pkg.outputs.version }}'
+          $safeVer = $version.Replace('+','_')
+          $repo    = $env:TLC_DOCKER_REPO
+          $tag     = "${repo}:$name-$safeVer"
+
+          $digRef = (& docker inspect --format '{{index .RepoDigests 0}}' $tag 2>$null).Trim()
+          if (-not $digRef) {
+            Write-Host "Could not determine RepoDigests for $tag; skipping contract dispatch."
+            exit 0
+          }
+
+          $labelsJson = (& docker inspect --format '{{ json .Config.Labels }}' $tag 2>$null).Trim()
+          $labels = @{}
+          if ($labelsJson) {
+            try { $labels = $labelsJson | ConvertFrom-Json } catch { $labels = @{} }
+          }
+
+          $specVersion = $labels.'io.allsagetech.toolchain.specVersion'
+          $tlcPath     = $labels.'io.allsagetech.toolchain.tlcPath'
+          $tlcSha256   = $labels.'io.allsagetech.toolchain.tlcSha256'
+
+          $digest = ($digRef -split '@',2)[1]
+
+          $payload = @{
+            dockerRepo      = $repo
+            packageName     = $name
+            packageVersion  = $version
+            tag             = "$name-$safeVer"
+            repoDigestRef   = $digRef
+            digest          = $digest
+            packageRef      = "$name@$digest"
+            specVersion     = $specVersion
+            tlcPath         = $tlcPath
+            tlcSha256       = $tlcSha256
+            sourceRepo      = $env:GITHUB_REPOSITORY
+            sourceRunId     = $env:GITHUB_RUN_ID
+            sourceSha       = $env:GITHUB_SHA
+          }
+
+          $headers = @{
+            'Authorization' = "Bearer $token"
+            'Accept'        = 'application/vnd.github+json'
+            'User-Agent'    = 'actions-toolchains'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+
+          $body = @{
+            event_type     = 'toolchains-built'
+            client_payload = $payload
+          } | ConvertTo-Json -Compress -Depth 10
+
+          Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$env:TOOLCHAIN_REPO/dispatches" -Headers $headers -Body $body

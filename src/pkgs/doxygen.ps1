@@ -1,17 +1,24 @@
-$global:PwrPackageConfig = @{
+<#
+Toolchains
+Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+Copyright (c) 2026 AllSageTech
+SPDX-License-Identifier: MPL-2.0
+#>
+
+$global:TlcPackageConfig = @{
 	Name = 'doxygen'
 }
 
-function global:Install-PwrPackage {
+function global:Install-TlcPackage {
 	$Params = @{
 		Owner = 'doxygen'
 		Repo = 'doxygen'
 		TagPattern = '^Release_([0-9]+)_([0-9]+)_([0-9]+)$'
 	}
 	$Latest = Get-GitHubTag @Params
-	$PwrPackageConfig.UpToDate = -not $Latest.Version.LaterThan($PwrPackageConfig.Latest)
-	$PwrPackageConfig.Version = $Latest.Version.ToString()
-	if ($PwrPackageConfig.UpToDate) {
+	$TlcPackageConfig.UpToDate = -not $Latest.Version.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $Latest.Version.ToString()
+	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
 	$Tag = $Latest.name
@@ -22,15 +29,15 @@ function global:Install-PwrPackage {
 		AssetURL = "https://www.doxygen.nl/files/$AssetName"
 	}
 	Install-BuildTool @Params
-	Write-PackageVars @{
+	Write-TlcVars @{
 		env = @{
 			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'doxygen.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
-function global:Test-PwrPackageInstall {
-	Airpower exec 'file:///\pkg' {
+function global:Test-TlcPackageInstall {
+	Toolchain exec (Get-TlcPkgUri) {
 		doxygen --version
 	}
 }

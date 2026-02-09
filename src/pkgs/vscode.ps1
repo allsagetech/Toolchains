@@ -1,14 +1,21 @@
-$global:PwrPackageConfig = @{
+<#
+Toolchains
+Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+Copyright (c) 2026 AllSageTech
+SPDX-License-Identifier: MPL-2.0
+#>
+
+$global:TlcPackageConfig = @{
 	Name = 'vscode'
 }
 
-function global:Install-PwrPackage {
+function global:Install-TlcPackage {
 	$AssetURL = 'https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-archive'
 	$Response = Invoke-WebRequest $AssetURL -Method 'HEAD'
-	$Version = [SemanticVersion]::new($Response.Headers.'Content-Disposition', 'filename=VSCode-win32-x64-([0-9]+)\.([0-9]+)\.([0-9]+)\.zip')
-	$PwrPackageConfig.UpToDate = -not $Version.LaterThan($PwrPackageConfig.Latest)
-	$PwrPackageConfig.Version = $Version.ToString()
-	if ($PwrPackageConfig.UpToDate) {
+	$Version = [TlcSemanticVersion]::new($Response.Headers.'Content-Disposition', 'filename=VSCode-win32-x64-([0-9]+)\.([0-9]+)\.([0-9]+)\.zip')
+	$TlcPackageConfig.UpToDate = -not $Version.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $Version.ToString()
+	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
 	$Params = @{
@@ -16,15 +23,15 @@ function global:Install-PwrPackage {
 		AssetURL = $AssetURL
 	}
 	Install-BuildTool @Params
-	Write-PackageVars @{
+	Write-TlcVars @{
 		env = @{
 			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'code.cmd' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
-function global:Test-PwrPackageInstall {
-	Airpower exec 'file:///\pkg' {
+function global:Test-TlcPackageInstall {
+	Toolchain exec (Get-TlcPkgUri) {
 		code --version
 	}
 }
