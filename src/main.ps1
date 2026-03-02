@@ -204,17 +204,26 @@ function Invoke-TlcScript($pkg) {
 function Save-WorkflowMatrix {
 	$tagList = Get-DockerTags (Get-TlcDockerRepo)
 	$pkgs = @()
-	$scripts = Get-ChildItem . -Include '*.ps1' -Recurse | Where-Object { $_.FullName -match [Regex]::Escape('\\pkgs\\') }
+	$scripts = Get-ChildItem . -Include '*.ps1' -Recurse -File |
+		Where-Object { $_.FullName -match '[\\/]pkgs[\\/]' } |
+		Sort-Object -Property FullName
+	$repoRoot = (Get-Location).Path
+	$refName = if ([string]::IsNullOrWhiteSpace($env:GITHUB_REF_NAME)) { $null } else { ($env:GITHUB_REF_NAME -replace '^.*/') }
 	foreach ($script in $scripts) {
 		Write-Output "toolchains: analyzing $($script.Name)"
 		Clear-TlcPackageScript
 		& $script.FullName
 		Test-TlcPackageScript
-		if ("$($env:GITHUB_REF_NAME -replace '^.*/').ps1" -eq $script.Name -or ($env:GITHUB_REF_NAME -replace '^.*/').StartsWith("$($script.BaseName)-")) {
-			$pkgs = ,$script.FullName.Replace((Get-Location), '.')
+		$scriptPath = $script.FullName.Replace($repoRoot, '.')
+		$matchesRef = $false
+		if ($refName) {
+			$matchesRef = ("$refName.ps1" -eq $script.Name -or $refName.StartsWith("$($script.BaseName)-"))
+		}
+		if ($matchesRef) {
+			$pkgs = ,$scriptPath
 			break
 		} elseif ((-not $TlcPackageConfig.Nonce) -or ("$($TlcPackageConfig.Name)-$($TlcPackageConfig.Version)" -notin $tagList.tags)) {
-			$pkgs += ,$script.FullName.Replace((Get-Location), '.')
+			$pkgs += ,$scriptPath
 		}
 	}
 	Clear-TlcPackageScript
