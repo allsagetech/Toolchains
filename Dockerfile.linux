@@ -1,0 +1,5 @@
+# Toolchains
+# Copyright (c) 2026 AllSageTech
+# SPDX-License-Identifier: MPL-2.0
+FROM ubuntu:22.04
+COPY . /

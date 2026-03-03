@@ -10,6 +10,10 @@ SPDX-License-Identifier: MPL-2.0
 $ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
 
+function Test-TlcHostIsWindows {
+	return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+}
+
 function Clear-TlcPackageScript {
 	Remove-Item Function:\Install-TlcPackage -Force -ErrorAction SilentlyContinue
 	Remove-Item Function:\Test-TlcPackageInstall -Force -ErrorAction SilentlyContinue
@@ -44,7 +48,7 @@ function Invoke-TlcPackageScan {
 	Get-MpThreatDetection
 }
 
-function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion) {
+function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string]$dockerfileName) {
 	if (Get-Command 'Invoke-CustomDockerBuild' -ErrorAction SilentlyContinue) {
 		Write-Host 'Using custom docker build'
 		Invoke-CustomDockerBuild $tag
@@ -59,7 +63,18 @@ function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion) {
 	$defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
 
 	$repoRoot = Split-Path -Parent $PSScriptRoot
-	$dockerfileSrc = Join-Path $repoRoot 'Dockerfile'
+	if (-not $dockerfileName) {
+		$dockerfileName = if (Test-TlcHostIsWindows) { 'Dockerfile' } else { 'Dockerfile.linux' }
+	}
+	$dockerfileSrc = Join-Path $repoRoot $dockerfileName
+	if (-not (Test-Path -LiteralPath $dockerfileSrc -PathType Leaf)) {
+		if ($dockerfileName -ne 'Dockerfile') {
+			$dockerfileSrc = Join-Path $repoRoot 'Dockerfile'
+		}
+		if (-not (Test-Path -LiteralPath $dockerfileSrc -PathType Leaf)) {
+			throw "Dockerfile not found for package build: $dockerfileName"
+		}
+	}
 	$dockerfileDst = Join-Path $pkgRoot 'Dockerfile'
 	Copy-Item -Path $dockerfileSrc -Destination $dockerfileDst -Force
 
@@ -147,7 +162,11 @@ function Invoke-DockerPush([string]$name, [string]$version) {
 		return
 	}
 
-	Invoke-DockerBuild $tag $name $version
+	$dockerfileName = $null
+	if ($global:TlcPackageConfig -and $global:TlcPackageConfig.ContainsKey('Dockerfile')) {
+		$dockerfileName = [string]$global:TlcPackageConfig.Dockerfile
+	}
+	Invoke-DockerBuild $tag $name $version $dockerfileName
 
 	& docker push $tag
 	if ($LASTEXITCODE -ne 0) { throw "docker push failed (exit code $LASTEXITCODE) for $tag" }
