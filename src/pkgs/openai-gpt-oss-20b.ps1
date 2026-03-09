@@ -194,26 +194,24 @@ function global:Invoke-CustomDockerBuild($tag) {
             "LABEL toolchain.tlcSha256=$defHash"
         )
 
-        $importArgs = @('import')
-        foreach ($change in $changes) {
-            $importArgs += @('--change', $change)
+        $scriptPath = [System.IO.Path]::GetTempFileName()
+        try {
+            $scriptLines = @('set -euo pipefail')
+            $importLine = "docker export '$containerId' | docker import"
+            foreach ($change in $changes) {
+                $importLine += " --change '$change'"
+            }
+            $importLine += " - '$tag'"
+            $scriptLines += $importLine
+
+            Set-Content -LiteralPath $scriptPath -Value ($scriptLines -join "`n") -NoNewline
+            & bash $scriptPath
+            if ($LASTEXITCODE -ne 0) {
+                throw "docker import failed (exit code $LASTEXITCODE) for $containerId"
+            }
         }
-        $importArgs += @('-', $tag)
-
-        $importCommand = @(
-            'docker export ' + $containerId,
-            'docker ' + (($importArgs | ForEach-Object {
-                if ($_ -match '[\s"]') {
-                    '"' + ($_ -replace '"', '\"') + '"'
-                } else {
-                    $_
-                }
-            }) -join ' ')
-        ) -join ' | '
-
-        & bash -lc "set -euo pipefail; $importCommand"
-        if ($LASTEXITCODE -ne 0) {
-            throw "docker import failed (exit code $LASTEXITCODE) for $containerId"
+        finally {
+            Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
         }
     }
     finally {
