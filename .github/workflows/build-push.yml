@@ -48,18 +48,31 @@ jobs:
           $raw = Get-Content .matrix -Raw
           $obj = $raw | ConvertFrom-Json
 
-          if ($null -eq $obj.package -or $obj.package.Count -eq 0) {
+          if ($null -eq $obj.include -or @($obj.include).Count -eq 0) {
             Write-Host "Save-WorkflowMatrix returned 0 packages; falling back to all scripts in .\src\pkgs\"
-            $all = Get-ChildItem -Path .\src\pkgs\ -Filter *.ps1 -Recurse |
-              ForEach-Object { $_.FullName.Replace((Get-Location).Path, '.') }
-            $raw = (ConvertTo-Json @{ package = @($all) } -Compress)
+            $all = Get-ChildItem -Path .\src\pkgs\ -Filter *.ps1 -Recurse | Sort-Object -Property FullName
+            $include = foreach ($script in $all) {
+              Clear-TlcPackageScript
+              & $script.FullName
+              Test-TlcPackageScript
+
+              $runsOn = if ($TlcPackageConfig.RunsOn) { [string]$TlcPackageConfig.RunsOn } else { 'windows-2022' }
+              [pscustomobject]@{
+                package    = $script.FullName.Replace((Get-Location).Path, '.')
+                runs_on    = $runsOn
+                pkg_root   = if ($runsOn -like 'ubuntu-*') { '.pkg' } else { 'D:\pkg' }
+                cache_path = if ($runsOn -like 'ubuntu-*') { '.pkg/cache' } else { 'D:\pkg\cache' }
+              }
+            }
+            Clear-TlcPackageScript
+            $raw = (ConvertTo-Json @{ include = @($include) } -Compress)
           }
 
           "matrix=$raw" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
   build:
     needs: init
-    runs-on: windows-2022
+    runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.init.outputs.matrix) }}
@@ -67,7 +80,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
-      TLC_PKG_ROOT: D:\pkg
+      TLC_PKG_ROOT: ${{ matrix.pkg_root }}
       TLC_COSIGN_SIGN: '1'
 
     steps:
@@ -96,7 +109,7 @@ jobs:
       - name: Cache downloads
         uses: actions/cache@v4
         with:
-          path: D:\pkg\cache
+          path: ${{ matrix.cache_path }}
           key: tlc-cache-${{ runner.os }}-${{ github.ref_name }}-${{ hashFiles('src/util.ps1', 'src/pkgs/**') }}
           restore-keys: |
             tlc-cache-${{ runner.os }}-${{ github.ref_name }}-
@@ -111,6 +124,7 @@ jobs:
         run: .\scripts\install-toolchain.ps1
 
       - name: Install Cosign (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -120,6 +134,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path $installDir | Out-Null
           Invoke-WebRequest -Uri $url -OutFile "$installDir\cosign.exe"
           # Ensure cosign is on PATH for subsequent steps
+          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Cosign (Linux)
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = 'v2.6.0'
+          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-linux-amd64"
+          $installDir = Join-Path $env:RUNNER_TEMP 'cosign'
+          $binaryPath = Join-Path $installDir 'cosign'
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile $binaryPath
+          & chmod +x $binaryPath
           "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Login to DockerHub
@@ -132,7 +160,7 @@ jobs:
         id: pkg
         shell: pwsh
         env:
-          TLC_PKG_ROOT: D:\pkg
+          TLC_PKG_ROOT: ${{ matrix.pkg_root }}
           TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -153,7 +181,7 @@ jobs:
             New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
           }
 
-          if (Test-Path $env:TLC_PKG_ROOT) {
+          if ($env:RUNNER_OS -eq 'Windows' -and (Test-Path $env:TLC_PKG_ROOT)) {
             if (Test-Path 'C:\pkg') { Remove-Item -Recurse -Force 'C:\pkg' }
             cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
           }
@@ -169,10 +197,10 @@ jobs:
           "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Scan package
-        if: ${{ steps.pkg.outputs.up-to-date == 'False' }}
+        if: ${{ runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False' }}
         shell: pwsh
         env:
-          TLC_PKG_ROOT: D:\pkg
+          TLC_PKG_ROOT: ${{ matrix.pkg_root }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not (Test-Path 'C:\pkg')) {
@@ -185,11 +213,11 @@ jobs:
         if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && steps.pkg.outputs.up-to-date == 'False' }}
         shell: pwsh
         env:
-          TLC_PKG_ROOT: D:\pkg
+          TLC_PKG_ROOT: ${{ matrix.pkg_root }}
           TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'C:\pkg')) {
+          if ($env:RUNNER_OS -eq 'Windows' -and -not (Test-Path 'C:\pkg')) {
             cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
           }
           . .\src\main.ps1

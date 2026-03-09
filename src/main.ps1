@@ -234,17 +234,26 @@ function Save-WorkflowMatrix {
 		& $script.FullName
 		Test-TlcPackageScript
 		$scriptPath = $script.FullName.Replace($repoRoot, '.')
+		$runsOn = if ($TlcPackageConfig.RunsOn) { [string]$TlcPackageConfig.RunsOn } else { 'windows-2022' }
+		$pkgRoot = if ($runsOn -like 'ubuntu-*') { '.pkg' } else { 'D:\pkg' }
+		$cachePath = if ($runsOn -like 'ubuntu-*') { '.pkg/cache' } else { 'D:\pkg\cache' }
+		$entry = @{
+			package    = $scriptPath
+			runs_on    = $runsOn
+			pkg_root   = $pkgRoot
+			cache_path = $cachePath
+		}
 		$matchesRef = $false
 		if ($refName) {
 			$matchesRef = ("$refName.ps1" -eq $script.Name -or $refName.StartsWith("$($script.BaseName)-"))
 		}
 		if ($matchesRef) {
-			$pkgs = ,$scriptPath
+			$pkgs = ,$entry
 			break
 		} elseif ((-not $TlcPackageConfig.Nonce) -or ("$($TlcPackageConfig.Name)-$($TlcPackageConfig.Version)" -notin $tagList.tags)) {
-			$pkgs += ,$scriptPath
+			$pkgs += ,$entry
 		}
 	}
 	Clear-TlcPackageScript
-	[IO.File]::WriteAllText('.matrix', (ConvertTo-Json @{ package = $pkgs } -Depth 50 -Compress))
+	[IO.File]::WriteAllText('.matrix', (ConvertTo-Json @{ include = $pkgs } -Depth 50 -Compress))
 }

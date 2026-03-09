@@ -6,6 +6,7 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'codex-linux'
+	RunsOn = 'ubuntu-latest'
 }
 
 function global:Install-TlcPackage {

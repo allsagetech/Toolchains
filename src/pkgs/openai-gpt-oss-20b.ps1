@@ -6,6 +6,7 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
     Name = 'openai-gpt-oss-20b'
+    RunsOn = 'ubuntu-latest'
 }
 
 function Get-HfHeaders {
