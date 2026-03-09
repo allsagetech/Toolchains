@@ -84,9 +84,13 @@ function global:Install-TlcPackage {
         throw "pip install huggingface_hub failed with exit code $LASTEXITCODE."
     }
 
-    $hfCli = Join-Path $venvRoot 'bin/huggingface-cli'
-    if (-not (Test-Path -LiteralPath $hfCli)) {
-        throw "Could not find huggingface-cli in virtual environment: $hfCli"
+    $hfCliCandidates = @(
+        (Join-Path $venvRoot 'bin/hf'),
+        (Join-Path $venvRoot 'bin/huggingface-cli')
+    )
+    $hfCli = $hfCliCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $hfCli) {
+        throw "Could not find Hugging Face CLI in virtual environment. Checked: $($hfCliCandidates -join ', ')"
     }
 
     $downloadArgs = @('download', 'openai/gpt-oss-20b', '--cache-dir', $cacheRoot)
