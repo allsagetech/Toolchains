@@ -79,6 +79,7 @@ jobs:
 
     env:
       GH_TOKEN: ${{ github.token }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
       TLC_PKG_ROOT: ${{ matrix.pkg_root }}
       TLC_COSIGN_SIGN: '1'
