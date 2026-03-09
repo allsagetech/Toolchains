@@ -9,14 +9,6 @@ $global:TlcPackageConfig = @{
     RunsOn = 'ubuntu-latest'
 }
 
-function Get-HfHeaders {
-    $headers = @{}
-    if ($env:HF_TOKEN) {
-        $headers['Authorization'] = "Bearer $($env:HF_TOKEN)"
-    }
-    return $headers
-}
-
 function global:Install-TlcPackage {
     $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
     if ($isWindowsHost) {
@@ -34,7 +26,12 @@ function global:Install-TlcPackage {
         throw 'python3 or python is required on PATH to build openai-gpt-oss-20b package.'
     }
 
-    $modelInfo = Invoke-TlcRestMethod -Uri 'https://huggingface.co/api/models/openai/gpt-oss-20b' -Headers (Get-HfHeaders)
+    $hfHeaders = @{}
+    if ($env:HF_TOKEN) {
+        $hfHeaders['Authorization'] = "Bearer $($env:HF_TOKEN)"
+    }
+
+    $modelInfo = Invoke-TlcRestMethod -Uri 'https://huggingface.co/api/models/openai/gpt-oss-20b' -Headers $hfHeaders
     $lastModifiedText = [string]$modelInfo.lastModified
     if (-not $lastModifiedText) {
         throw 'Could not determine lastModified for openai/gpt-oss-20b from Hugging Face.'
