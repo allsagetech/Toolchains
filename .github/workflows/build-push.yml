@@ -193,6 +193,7 @@ jobs:
           $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
           Invoke-TlcScript $scriptPath
 
+          "script=$scriptRel" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -222,6 +223,9 @@ jobs:
             cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
           }
           . .\src\main.ps1
+          Clear-TlcPackageScript
+          & (Resolve-Path '${{ steps.pkg.outputs.script }}').Path
+          Test-TlcPackageScript
           Invoke-DockerPush '${{ steps.pkg.outputs.name }}' '${{ steps.pkg.outputs.version }}'
 
       - name: Trigger Toolchain contract tests
