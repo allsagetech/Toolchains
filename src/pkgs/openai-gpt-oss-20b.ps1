@@ -118,6 +118,10 @@ function global:Install-TlcPackage {
     }
     Set-Content -LiteralPath $manifestPath -Value ($manifest | ConvertTo-Json -Depth 8)
 
+    if (Test-Path -LiteralPath $toolRoot) {
+        Remove-Item -LiteralPath $toolRoot -Recurse -Force
+    }
+
     Write-TlcVars @{
         env = @{
             HF_HOME                    = '${.}/hf-cache'
@@ -153,6 +157,59 @@ function global:Test-TlcPackageInstall {
         $cacheSlug = $cacheCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
         if (-not $cacheSlug) {
             throw "Downloaded Hugging Face cache entry not found. Checked: $($cacheCandidates -join ', ')"
+        }
+    }
+}
+
+function global:Invoke-CustomDockerBuild($tag) {
+    $pkgRoot = Get-TlcPkgRoot
+    if (-not (Test-Path -LiteralPath $pkgRoot)) {
+        throw "Package root does not exist: $pkgRoot"
+    }
+
+    $null = Assert-TlcDefinitionFile
+    $defPath = Join-Path $pkgRoot '.tlc'
+    $defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
+    $containerName = "toolchains-openai-gpt-oss-20b-" + [Guid]::NewGuid().ToString('n')
+    $containerId = $null
+
+    try {
+        $containerId = (& docker create --name $containerName ubuntu:22.04 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
+            throw 'docker create failed for openai-gpt-oss-20b image assembly.'
+        }
+
+        & docker cp "$pkgRoot/." "${containerId}:/"
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker cp failed (exit code $LASTEXITCODE) for $containerId"
+        }
+
+        $changes = @(
+            'LABEL io.allsagetech.toolchain.specVersion=1',
+            "LABEL io.allsagetech.toolchain.packageName=$($TlcPackageConfig.Name)",
+            "LABEL io.allsagetech.toolchain.packageVersion=$($TlcPackageConfig.Version)",
+            'LABEL io.allsagetech.toolchain.tlcPath=/.tlc',
+            "LABEL io.allsagetech.toolchain.tlcSha256=$defHash",
+            'LABEL toolchain.tlcPath=/.tlc',
+            "LABEL toolchain.tlcSha256=$defHash"
+        )
+
+        $commitArgs = @('commit')
+        foreach ($change in $changes) {
+            $commitArgs += @('--change', $change)
+        }
+        $commitArgs += @($containerId, $tag)
+
+        & docker @commitArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker commit failed (exit code $LASTEXITCODE) for $containerId"
+        }
+    }
+    finally {
+        if ($containerId) {
+            & docker rm -f $containerId *> $null
+        } else {
+            & docker rm -f $containerName *> $null
         }
     }
 }

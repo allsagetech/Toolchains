@@ -17,6 +17,7 @@ function Test-TlcHostIsWindows {
 function Clear-TlcPackageScript {
 	Remove-Item Function:\Install-TlcPackage -Force -ErrorAction SilentlyContinue
 	Remove-Item Function:\Test-TlcPackageInstall -Force -ErrorAction SilentlyContinue
+	Remove-Item Function:\Invoke-CustomDockerBuild -Force -ErrorAction SilentlyContinue
 	Clear-Variable 'TlcPackageConfig' -Force -ErrorAction SilentlyContinue
 }
 
