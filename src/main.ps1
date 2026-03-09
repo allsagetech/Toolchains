@@ -236,8 +236,8 @@ function Save-WorkflowMatrix {
 		Test-TlcPackageScript
 		$scriptPath = $script.FullName.Replace($repoRoot, '.')
 		$runsOn = if ($TlcPackageConfig.RunsOn) { [string]$TlcPackageConfig.RunsOn } else { 'windows-2022' }
-		$pkgRoot = if ($runsOn -like 'ubuntu-*') { '.pkg' } else { 'D:\pkg' }
-		$cachePath = if ($runsOn -like 'ubuntu-*') { '.pkg/cache' } else { 'D:\pkg\cache' }
+		$pkgRoot = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg' } else { 'D:\pkg' }
+		$cachePath = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg/cache' } else { 'D:\pkg\cache' }
 		$entry = @{
 			package    = $scriptPath
 			runs_on    = $runsOn

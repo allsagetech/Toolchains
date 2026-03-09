@@ -60,8 +60,8 @@ jobs:
               [pscustomobject]@{
                 package    = $script.FullName.Replace((Get-Location).Path, '.')
                 runs_on    = $runsOn
-                pkg_root   = if ($runsOn -like 'ubuntu-*') { '.pkg' } else { 'D:\pkg' }
-                cache_path = if ($runsOn -like 'ubuntu-*') { '.pkg/cache' } else { 'D:\pkg\cache' }
+                pkg_root   = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg' } else { 'D:\pkg' }
+                cache_path = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg/cache' } else { 'D:\pkg\cache' }
               }
             }
             Clear-TlcPackageScript
@@ -123,6 +123,19 @@ jobs:
           TOOLCHAIN_REF: pipeline
           GH_TOKEN: ${{ github.token }}
         run: .\scripts\install-toolchain.ps1
+
+      - name: Prepare Docker Storage (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_root="/mnt/docker-data"
+          sudo systemctl stop docker
+          sudo rm -rf /var/lib/docker
+          sudo mkdir -p "$docker_root"
+          sudo ln -s "$docker_root" /var/lib/docker
+          sudo systemctl start docker
+          docker info > /dev/null
 
       - name: Install Cosign (Windows)
         if: runner.os == 'Windows'
