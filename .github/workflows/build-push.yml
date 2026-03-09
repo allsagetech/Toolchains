@@ -101,6 +101,14 @@ jobs:
           java -version
           Write-Host "JAVA_HOME=$env:JAVA_HOME"
 
+      - name: Prepare Package Storage (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/toolchains-pkg/cache
+          sudo chown -R "$(id -u):$(id -g)" /mnt/toolchains-pkg
+
       - name: Ensure cache directory
         shell: pwsh
         run: |
