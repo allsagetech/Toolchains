@@ -66,8 +66,19 @@ jobs:
             }
             Clear-TlcPackageScript
             $raw = (ConvertTo-Json @{ include = @($include) } -Compress)
+            $obj = $raw | ConvertFrom-Json
           }
 
+          $include = @($obj.include)
+          foreach ($entry in $include) {
+            if ($entry.package -match 'openai-gpt-oss-20b\.ps1$') {
+              $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
+              $entry.pkg_root = '/mnt/toolchains-pkg'
+              $entry.cache_path = '/mnt/toolchains-pkg/cache'
+            }
+          }
+
+          $raw = (ConvertTo-Json @{ include = $include } -Depth 50 -Compress)
           "matrix=$raw" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
   build:
