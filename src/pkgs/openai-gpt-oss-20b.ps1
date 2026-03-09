@@ -121,8 +121,8 @@ function global:Install-TlcPackage {
     Write-TlcVars @{
         env = @{
             HF_HOME                    = '${.}/hf-cache'
-            HF_HUB_CACHE               = '${.}/hf-cache/hub'
-            TRANSFORMERS_CACHE         = '${.}/hf-cache/hub'
+            HF_HUB_CACHE               = '${.}/hf-cache'
+            TRANSFORMERS_CACHE         = '${.}/hf-cache'
             LOCAL_CODEX_HF_CACHE_SEED  = '${.}/hf-cache'
             LOCAL_CODEX_MODEL_MANIFEST = '${.}/official-models.manifest.json'
             LOCAL_CODEX_OFFICIAL_MODEL = 'openai/gpt-oss-20b'
@@ -144,9 +144,15 @@ function global:Test-TlcPackageInstall {
             throw "Unexpected model repo in manifest: $($manifest.models[0].repo)"
         }
 
-        $cacheSlug = Join-Path $env:HF_HUB_CACHE 'models--openai--gpt-oss-20b'
-        if (-not (Test-Path -LiteralPath $cacheSlug)) {
-            throw "Downloaded Hugging Face cache entry not found: $cacheSlug"
+        $cacheCandidates = @(
+            (Join-Path $env:HF_HUB_CACHE 'models--openai--gpt-oss-20b'),
+            (Join-Path $env:HF_HOME 'models--openai--gpt-oss-20b'),
+            (Join-Path $env:HF_HOME 'hub/models--openai--gpt-oss-20b')
+        ) | Select-Object -Unique
+
+        $cacheSlug = $cacheCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (-not $cacheSlug) {
+            throw "Downloaded Hugging Face cache entry not found. Checked: $($cacheCandidates -join ', ')"
         }
     }
 }
