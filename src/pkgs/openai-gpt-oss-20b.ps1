@@ -194,15 +194,26 @@ function global:Invoke-CustomDockerBuild($tag) {
             "LABEL toolchain.tlcSha256=$defHash"
         )
 
-        $commitArgs = @('commit')
+        $importArgs = @('import')
         foreach ($change in $changes) {
-            $commitArgs += @('--change', $change)
+            $importArgs += @('--change', $change)
         }
-        $commitArgs += @($containerId, $tag)
+        $importArgs += @('-', $tag)
 
-        & docker @commitArgs
+        $importCommand = @(
+            'docker export ' + $containerId,
+            'docker ' + (($importArgs | ForEach-Object {
+                if ($_ -match '[\s"]') {
+                    '"' + ($_ -replace '"', '\"') + '"'
+                } else {
+                    $_
+                }
+            }) -join ' ')
+        ) -join ' | '
+
+        & bash -lc "set -euo pipefail; $importCommand"
         if ($LASTEXITCODE -ne 0) {
-            throw "docker commit failed (exit code $LASTEXITCODE) for $containerId"
+            throw "docker import failed (exit code $LASTEXITCODE) for $containerId"
         }
     }
     finally {
