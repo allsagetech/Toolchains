@@ -9,7 +9,7 @@ $global:TlcPackageConfig = @{
     RunsOn = 'ubuntu-latest'
 }
 
-function Invoke-HuggingFaceSnapshotDownload {
+function global:Invoke-HuggingFaceSnapshotDownload {
     param(
         [Parameter(Mandatory = $true)][string]$PythonPath,
         [Parameter(Mandatory = $true)][string]$RepoId,
