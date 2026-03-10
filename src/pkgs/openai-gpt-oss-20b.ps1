@@ -9,6 +9,85 @@ $global:TlcPackageConfig = @{
     RunsOn = 'ubuntu-latest'
 }
 
+function Invoke-HuggingFaceSnapshotDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$PythonPath,
+        [Parameter(Mandatory = $true)][string]$RepoId,
+        [Parameter(Mandatory = $true)][string]$CacheDir,
+        [Parameter(Mandatory = $true)][string[]]$AllowPatterns
+    )
+
+    $downloadScriptPath = [System.IO.Path]::GetTempFileName()
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    $oldRepoId = $env:TLC_HF_REPO_ID
+    $oldAllowPatterns = $env:TLC_HF_ALLOW_PATTERNS
+    $oldHubCache = $env:HF_HUB_CACHE
+
+    try {
+        $downloadScript = @'
+import os
+from huggingface_hub import snapshot_download
+
+repo_id = os.environ["TLC_HF_REPO_ID"]
+allow_patterns = [item for item in os.environ.get("TLC_HF_ALLOW_PATTERNS", "").splitlines() if item]
+token = os.environ.get("HF_TOKEN") or None
+
+path = snapshot_download(
+    repo_id=repo_id,
+    cache_dir=os.environ["HF_HUB_CACHE"],
+    token=token,
+    allow_patterns=allow_patterns or None,
+)
+
+print(path, flush=True)
+'@
+        Set-Content -LiteralPath $downloadScriptPath -Value $downloadScript -NoNewline
+
+        $env:TLC_HF_REPO_ID = $RepoId
+        $env:TLC_HF_ALLOW_PATTERNS = ($AllowPatterns -join "`n")
+        $env:HF_HUB_CACHE = $CacheDir
+
+        $downloadProc = Start-Process -FilePath $PythonPath `
+            -ArgumentList @('-u', $downloadScriptPath) `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        $heartbeat = 0
+        while (-not $downloadProc.HasExited) {
+            Start-Sleep -Seconds 60
+            $downloadProc.Refresh()
+            if (-not $downloadProc.HasExited) {
+                $heartbeat += 1
+                Write-Host ("Hugging Face download still running (heartbeat {0}, utc={1})." -f $heartbeat, ([datetime]::UtcNow.ToString('o')))
+            }
+        }
+
+        if (Test-Path -LiteralPath $stdoutPath) {
+            Get-Content -LiteralPath $stdoutPath | ForEach-Object { Write-Host $_ }
+        }
+        if (Test-Path -LiteralPath $stderrPath) {
+            Get-Content -LiteralPath $stderrPath | ForEach-Object { Write-Host $_ }
+        }
+
+        if ($downloadProc.ExitCode -ne 0) {
+            throw "snapshot_download failed with exit code $($downloadProc.ExitCode)."
+        }
+    }
+    finally {
+        $env:TLC_HF_REPO_ID = $oldRepoId
+        $env:TLC_HF_ALLOW_PATTERNS = $oldAllowPatterns
+        $env:HF_HUB_CACHE = $oldHubCache
+
+        foreach ($path in @($downloadScriptPath, $stdoutPath, $stderrPath)) {
+            if ($path -and (Test-Path -LiteralPath $path)) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 function global:Install-TlcPackage {
     $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
     if ($isWindowsHost) {
@@ -88,31 +167,37 @@ function global:Install-TlcPackage {
         throw "pip install huggingface_hub failed with exit code $LASTEXITCODE."
     }
 
-    $hfCliCandidates = @(
-        (Join-Path $venvRoot 'bin/hf'),
-        (Join-Path $venvRoot 'bin/huggingface-cli')
-    )
-    $hfCli = $hfCliCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if (-not $hfCli) {
-        throw "Could not find Hugging Face CLI in virtual environment. Checked: $($hfCliCandidates -join ', ')"
-    }
-
-    $downloadArgs = @('download', 'openai/gpt-oss-20b', '--cache-dir', $cacheRoot)
-    if ($env:HF_TOKEN) {
-        $downloadArgs += @('--token', $env:HF_TOKEN)
-    }
-    if ($env:HF_HUB_DOWNLOAD_TIMEOUT) {
-        $env:HF_HUB_DOWNLOAD_TIMEOUT = $env:HF_HUB_DOWNLOAD_TIMEOUT
-    }
     $env:HF_HOME = $cacheRoot
     $env:HF_HUB_CACHE = $cacheRoot
     $env:TRANSFORMERS_CACHE = $cacheRoot
     $env:HF_XET_CACHE = $xetCacheRoot
-
-    & $hfCli @downloadArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "huggingface-cli download openai/gpt-oss-20b failed with exit code $LASTEXITCODE."
+    $env:HF_XET_HIGH_PERFORMANCE = '1'
+    if (-not $env:HF_HUB_DOWNLOAD_TIMEOUT) {
+        $env:HF_HUB_DOWNLOAD_TIMEOUT = '600'
     }
+    if (-not $env:HF_HUB_ETAG_TIMEOUT) {
+        $env:HF_HUB_ETAG_TIMEOUT = '30'
+    }
+
+    $downloadPatterns = @(
+        'LICENSE'
+        'README.md'
+        'USAGE_POLICY'
+        'chat_template.jinja'
+        'config.json'
+        'generation_config.json'
+        'model-*.safetensors'
+        'model.safetensors.index.json'
+        'special_tokens_map.json'
+        'tokenizer.json'
+        'tokenizer_config.json'
+    )
+
+    Invoke-HuggingFaceSnapshotDownload `
+        -PythonPath $venvPython `
+        -RepoId 'openai/gpt-oss-20b' `
+        -CacheDir $cacheRoot `
+        -AllowPatterns $downloadPatterns
 
     $manifest = [pscustomobject]@{
         models = @(
@@ -165,6 +250,39 @@ function global:Test-TlcPackageInstall {
         $cacheSlug = $cacheCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
         if (-not $cacheSlug) {
             throw "Downloaded Hugging Face cache entry not found. Checked: $($cacheCandidates -join ', ')"
+        }
+
+        $requiredFiles = @(
+            'config.json'
+            'tokenizer.json'
+            'model.safetensors.index.json'
+        )
+        foreach ($requiredFile in $requiredFiles) {
+            $file = Get-ChildItem -LiteralPath $cacheSlug -Recurse -File -Filter $requiredFile -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $file) {
+                throw "Required model file missing from Hugging Face cache: $requiredFile"
+            }
+        }
+
+        $indexFile = Get-ChildItem -LiteralPath $cacheSlug -Recurse -File -Filter 'model.safetensors.index.json' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $indexFile) {
+            throw 'Model shard index file missing from Hugging Face cache.'
+        }
+
+        $weightIndex = Get-Content -LiteralPath $indexFile.FullName -Raw | ConvertFrom-Json
+        if (-not $weightIndex.weight_map) {
+            throw 'model.safetensors.index.json is missing weight_map.'
+        }
+        $requiredShards = @($weightIndex.weight_map.PSObject.Properties.Value | Select-Object -Unique)
+        if ($requiredShards.Count -eq 0) {
+            throw 'model.safetensors.index.json does not list any shard files.'
+        }
+
+        foreach ($requiredShard in $requiredShards) {
+            $shard = Get-ChildItem -LiteralPath $cacheSlug -Recurse -File -Filter $requiredShard -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $shard) {
+                throw "Required model shard missing from Hugging Face cache: $requiredShard"
+            }
         }
     }
 }
