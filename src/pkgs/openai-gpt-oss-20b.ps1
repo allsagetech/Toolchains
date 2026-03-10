@@ -50,19 +50,23 @@ function global:Install-TlcPackage {
     $pkgRoot = Get-TlcPkgRoot
     New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null
 
-    $cacheRoot = Join-Path $pkgRoot 'hf-cache'
+    $persistentCacheRoot = Join-Path $pkgRoot 'cache'
+    $legacyCacheRoot = Join-Path $pkgRoot 'hf-cache'
+    $cacheRoot = Join-Path $persistentCacheRoot 'hf-cache'
+    $xetCacheRoot = Join-Path $persistentCacheRoot 'hf-xet'
     $manifestPath = Join-Path $pkgRoot 'official-models.manifest.json'
     $toolRoot = Join-Path $pkgRoot '.hf-tools'
     $venvRoot = Join-Path $toolRoot 'venv'
 
-    foreach ($path in @($cacheRoot, $toolRoot)) {
+    foreach ($path in @($legacyCacheRoot, $toolRoot)) {
         if (Test-Path -LiteralPath $path) {
             Remove-Item -LiteralPath $path -Recurse -Force
         }
     }
 
-    New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
-    New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+    foreach ($path in @($persistentCacheRoot, $cacheRoot, $xetCacheRoot, $toolRoot)) {
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
 
     & $python.Source -m venv $venvRoot
     if ($LASTEXITCODE -ne 0) {
@@ -100,6 +104,10 @@ function global:Install-TlcPackage {
     if ($env:HF_HUB_DOWNLOAD_TIMEOUT) {
         $env:HF_HUB_DOWNLOAD_TIMEOUT = $env:HF_HUB_DOWNLOAD_TIMEOUT
     }
+    $env:HF_HOME = $cacheRoot
+    $env:HF_HUB_CACHE = $cacheRoot
+    $env:TRANSFORMERS_CACHE = $cacheRoot
+    $env:HF_XET_CACHE = $xetCacheRoot
 
     & $hfCli @downloadArgs
     if ($LASTEXITCODE -ne 0) {
@@ -124,10 +132,10 @@ function global:Install-TlcPackage {
 
     Write-TlcVars @{
         env = @{
-            HF_HOME                    = '${.}/hf-cache'
-            HF_HUB_CACHE               = '${.}/hf-cache'
-            TRANSFORMERS_CACHE         = '${.}/hf-cache'
-            LOCAL_CODEX_HF_CACHE_SEED  = '${.}/hf-cache'
+            HF_HOME                    = '${.}/cache/hf-cache'
+            HF_HUB_CACHE               = '${.}/cache/hf-cache'
+            TRANSFORMERS_CACHE         = '${.}/cache/hf-cache'
+            LOCAL_CODEX_HF_CACHE_SEED  = '${.}/cache/hf-cache'
             LOCAL_CODEX_MODEL_MANIFEST = '${.}/official-models.manifest.json'
             LOCAL_CODEX_OFFICIAL_MODEL = 'openai/gpt-oss-20b'
         }
