@@ -88,6 +88,48 @@ print(path, flush=True)
     }
 }
 
+function global:Write-GptOssLayeredDockerfile {
+    param(
+        [Parameter(Mandatory = $true)][string]$PkgRoot,
+        [Parameter(Mandatory = $true)][string]$CacheSlug
+    )
+
+    $dockerfilePath = Join-Path $PkgRoot 'Dockerfile.openai-gpt-oss-20b'
+    $refsPath = Join-Path $CacheSlug 'refs'
+    $snapshotsPath = Join-Path $CacheSlug 'snapshots'
+    $blobsPath = Join-Path $CacheSlug 'blobs'
+
+    $dockerLines = @(
+        'FROM ubuntu:22.04',
+        'COPY .tlc /.tlc',
+        'COPY official-models.manifest.json /official-models.manifest.json'
+    )
+
+    if (Test-Path -LiteralPath $refsPath) {
+        $dockerLines += 'COPY cache/hf-cache/models--openai--gpt-oss-20b/refs /cache/hf-cache/models--openai--gpt-oss-20b/refs'
+    }
+    if (Test-Path -LiteralPath $snapshotsPath) {
+        $dockerLines += 'COPY cache/hf-cache/models--openai--gpt-oss-20b/snapshots /cache/hf-cache/models--openai--gpt-oss-20b/snapshots'
+    }
+
+    if (-not (Test-Path -LiteralPath $blobsPath)) {
+        throw "Model blobs directory not found: $blobsPath"
+    }
+
+    $blobFiles = Get-ChildItem -LiteralPath $blobsPath -File | Sort-Object Name
+    if ($blobFiles.Count -eq 0) {
+        throw "No model blobs found in: $blobsPath"
+    }
+
+    foreach ($blobFile in $blobFiles) {
+        $relPath = "cache/hf-cache/models--openai--gpt-oss-20b/blobs/$($blobFile.Name)"
+        $dockerLines += "COPY $relPath /$relPath"
+    }
+
+    Set-Content -LiteralPath $dockerfilePath -Value ($dockerLines -join "`n") -NoNewline
+    return $dockerfilePath
+}
+
 function global:Install-TlcPackage {
     $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
     if ($isWindowsHost) {
@@ -211,6 +253,17 @@ function global:Install-TlcPackage {
     }
     Set-Content -LiteralPath $manifestPath -Value ($manifest | ConvertTo-Json -Depth 8)
 
+    $cacheCandidates = @(
+        (Join-Path $cacheRoot 'models--openai--gpt-oss-20b'),
+        (Join-Path $cacheRoot 'hub/models--openai--gpt-oss-20b')
+    ) | Select-Object -Unique
+    $cacheSlug = $cacheCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $cacheSlug) {
+        throw "Downloaded Hugging Face cache entry not found after download. Checked: $($cacheCandidates -join ', ')"
+    }
+
+    $null = Write-GptOssLayeredDockerfile -PkgRoot $pkgRoot -CacheSlug $cacheSlug
+
     if (Test-Path -LiteralPath $toolRoot) {
         Remove-Item -LiteralPath $toolRoot -Recurse -Force
     }
@@ -284,6 +337,41 @@ function global:Test-TlcPackageInstall {
                 throw "Required model shard missing from Hugging Face cache: $requiredShard"
             }
         }
+    }
+}
+
+function global:Invoke-CustomDockerBuild($tag) {
+    $pkgRoot = Get-TlcPkgRoot
+    if (-not (Test-Path -LiteralPath $pkgRoot)) {
+        throw "Package root does not exist: $pkgRoot"
+    }
+
+    $null = Assert-TlcDefinitionFile
+    $defPath = Join-Path $pkgRoot '.tlc'
+    $defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
+    $dockerfilePath = Join-Path $pkgRoot 'Dockerfile.openai-gpt-oss-20b'
+    if (-not (Test-Path -LiteralPath $dockerfilePath)) {
+        throw "Layered Dockerfile not found: $dockerfilePath"
+    }
+
+    $args = @('build', '-f', $dockerfilePath, '-t', $tag)
+    $labels = @(
+        "io.allsagetech.toolchain.packageName=$($TlcPackageConfig.Name)",
+        "io.allsagetech.toolchain.packageVersion=$($TlcPackageConfig.Version)",
+        'io.allsagetech.toolchain.specVersion=1',
+        'io.allsagetech.toolchain.tlcPath=/.tlc',
+        "io.allsagetech.toolchain.tlcSha256=$defHash",
+        'toolchain.tlcPath=/.tlc',
+        "toolchain.tlcSha256=$defHash"
+    )
+    foreach ($label in $labels) {
+        $args += @('--label', $label)
+    }
+    $args += @($pkgRoot)
+
+    & docker @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker build failed with exit code $LASTEXITCODE for $tag"
     }
 }
 
