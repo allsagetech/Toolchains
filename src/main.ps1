@@ -170,6 +170,13 @@ function Invoke-DockerPush([string]$name, [string]$version) {
 	}
 	Invoke-DockerBuild $tag $name $version $dockerfileName
 
+	$imageBytesText = (& docker image inspect $tag --format '{{.Size}}' 2>$null | Out-String).Trim()
+	[long]$imageBytes = 0
+	if ([long]::TryParse($imageBytesText, [ref]$imageBytes)) {
+		$imageGiB = [math]::Round(($imageBytes / 1GB), 2)
+		Write-Host "Docker image size before push: $imageBytes bytes ($imageGiB GiB)"
+	}
+
 	& docker push $tag
 	if ($LASTEXITCODE -ne 0) { throw "docker push failed (exit code $LASTEXITCODE) for $tag" }
 	Invoke-CosignSignImage $tag
