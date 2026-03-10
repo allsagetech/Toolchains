@@ -8,6 +8,7 @@ name: Build Toolchain Packages
 
 on:
   push:
+  pull_request:
   schedule:
     - cron: '9 2 */4 * *'
   workflow_dispatch:
@@ -70,11 +71,20 @@ jobs:
           }
 
           $include = @($obj.include)
-          foreach ($entry in $include) {
-            if ($entry.package -match 'openai-gpt-oss-20b\.ps1$') {
-              $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
-              $entry.pkg_root = '/mnt/toolchains-pkg'
-              $entry.cache_path = '/mnt/toolchains-pkg/cache'
+          $allowOpenAiGptOss = ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch')
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_NAME -match '^(openai-gpt-oss-20b|openai-gpt-oss-20b-.+)$') {
+            $allowOpenAiGptOss = $true
+          }
+
+          if (-not $allowOpenAiGptOss) {
+            $include = @($include | Where-Object { $_.package -notmatch 'openai-gpt-oss-20b\.ps1$' })
+          } else {
+            foreach ($entry in $include) {
+              if ($entry.package -match 'openai-gpt-oss-20b\.ps1$') {
+                $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
+                $entry.pkg_root = '/mnt/toolchains-pkg'
+                $entry.cache_path = '/mnt/toolchains-pkg/cache'
+              }
             }
           }
 

@@ -53,6 +53,9 @@ function Invoke-TlcPackageScan {
 function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string]$dockerfileName) {
 	if (Get-Command 'Invoke-CustomDockerBuild' -ErrorAction SilentlyContinue) {
 		Write-Host 'Using custom docker build'
+		if (-not $global:TlcPackageConfig) { $global:TlcPackageConfig = @{} }
+		if ($pkgName) { $global:TlcPackageConfig.Name = $pkgName }
+		if ($pkgVersion) { $global:TlcPackageConfig.Version = $pkgVersion }
 		Invoke-CustomDockerBuild $tag
 		return
 	}
