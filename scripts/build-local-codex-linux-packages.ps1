@@ -5,7 +5,9 @@ SPDX-License-Identifier: MPL-2.0
 #>
 
 param(
-	[switch]$SkipPush
+	[switch]$SkipPush,
+	[switch]$IncludeModels,
+	[string[]]$ModelPackages
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,10 +23,23 @@ Set-Location $repoRoot
 . .\src\main.ps1
 
 $packageScripts = @(
-	'.\src\pkgs\codex-linux.ps1'
 	'.\src\pkgs\git-linux.ps1'
-	'.\src\pkgs\llvm-linux.ps1'
 )
+
+if ($IncludeModels) {
+	if (-not $ModelPackages -or $ModelPackages.Count -eq 0) {
+		$ModelPackages = @(
+			'smollm2-135m-instruct'
+			'smollm2-360m-instruct'
+			'qwen2.5-0.5b-instruct'
+			'qwen3-0.6b'
+		)
+	}
+	foreach ($modelPackage in $ModelPackages) {
+		$scriptPath = if ($modelPackage -match '\.ps1$') { $modelPackage } else { ".\src\pkgs\$modelPackage.ps1" }
+		$packageScripts += $scriptPath
+	}
+}
 
 foreach ($pkg in $packageScripts) {
 	Write-Host "=============================="
