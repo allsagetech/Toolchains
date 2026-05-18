@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 $global:TlcPackageConfig = @{
 	Name = 'smollm2-360m-instruct'
 	RunsOn = 'ubuntu-latest'
+	Tier = 'model-small'
 }
 
 function global:Install-TlcPackage {

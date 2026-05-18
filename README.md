@@ -19,7 +19,11 @@ Small local model seed packages are available as separate refs so consumers can 
 - `qwen3-0.6b:latest` for `Qwen/Qwen3-0.6B`
 - `openai-gpt-oss-20b:latest` for `openai/gpt-oss-20b`
 
-Model packages seed Hugging Face cache content and write `LOCAL_CODEX_MODEL_MANIFEST`, `LOCAL_CODEX_HF_CACHE_SEED`, and `LOCAL_CODEX_OFFICIAL_MODEL` into the `.tlc` environment. Set `HF_TOKEN` for private or gated Hugging Face repositories before building.
+Model packages seed Hugging Face cache content under `cache/hf-cache` and write `LOCAL_CODEX_MODEL_MANIFEST`, `LOCAL_CODEX_HF_CACHE_SEED`, and `LOCAL_CODEX_OFFICIAL_MODEL` into the `.tlc` environment. Generic model packages download only common model/runtime files by default; package descriptors can pass custom `AllowPatterns` when a repository needs a different file set. Generic model packages also generate layered Dockerfiles so Hugging Face refs, snapshots, and individual blobs can be cached independently by Docker. Set `HF_TOKEN` for private or gated Hugging Face repositories before building.
+
+Package scripts can declare `TlcPackageConfig.Tier` as `tooling`, `model-small`, or `model-large`. Pull requests run script validation only; pushes to `main` include tooling plus small models; schedules and manual workflow runs include large models, with large models moved to the self-hosted `toolchains-large` runner.
+
+Default Windows package builds run on a self-hosted runner labeled `self-hosted`, `windows`, `x64`, and `toolchains-windows-docker`. GitHub-hosted Windows runners do not provide the Windows Docker daemon needed to build and push the Nano Server package images.
 
 Use the helper script on a Linux host/runner:
 
@@ -44,6 +48,12 @@ Notes:
 - `Dockerfile` is used on Windows package builds.
 - `Dockerfile.linux` is used automatically on non-Windows hosts.
 - Keep package build/push workflows in this repo; consumers should only `toolchain save`/`toolchain exec` those refs.
+
+Run local validation without building packages:
+
+```powershell
+pwsh -NoLogo -NoProfile -File ./scripts/test-toolchains.ps1
+```
 
 ## Optional image signing (cosign)
 

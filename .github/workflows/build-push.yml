@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   init:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: windows-2022
     outputs:
       matrix: ${{ steps.init.outputs.matrix }}
@@ -57,12 +58,15 @@ jobs:
               & $script.FullName
               Test-TlcPackageScript
 
-              $runsOn = if ($TlcPackageConfig.RunsOn) { [string]$TlcPackageConfig.RunsOn } else { 'windows-2022' }
+              $runsOn = if ($TlcPackageConfig.RunsOn) { $TlcPackageConfig.RunsOn } else { Get-TlcDefaultWindowsDockerRunner }
+              $tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
+              $isUbuntuRunner = Test-TlcRunsOnUbuntu -RunsOn $runsOn
               [pscustomobject]@{
                 package    = $script.FullName.Replace((Get-Location).Path, '.')
                 runs_on    = $runsOn
-                pkg_root   = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg' } else { 'D:\pkg' }
-                cache_path = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg/cache' } else { 'D:\pkg\cache' }
+                tier       = $tier
+                pkg_root   = if ($isUbuntuRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
+                cache_path = if ($isUbuntuRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
               }
             }
             Clear-TlcPackageScript
@@ -71,16 +75,30 @@ jobs:
           }
 
           $include = @($obj.include)
-          $allowOpenAiGptOss = ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch')
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_NAME -match '^(openai-gpt-oss-20b|openai-gpt-oss-20b-.+)$') {
-            $allowOpenAiGptOss = $true
-          }
+          $isPullRequest = ($env:GITHUB_EVENT_NAME -eq 'pull_request')
+          $isMainPush = ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main')
+          $isScheduled = ($env:GITHUB_EVENT_NAME -eq 'schedule')
+          $isManual = ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch')
 
-          if (-not $allowOpenAiGptOss) {
-            $include = @($include | Where-Object { $_.package -notmatch 'openai-gpt-oss-20b\.ps1$' })
+          if ($isPullRequest) {
+            $include = @()
           } else {
+            $include = @($include | Where-Object {
+              $tier = if ($_.tier) { [string]$_.tier } else { 'tooling' }
+              $baseName = [IO.Path]::GetFileNameWithoutExtension([string]$_.package)
+              $matchesRef = $false
+              if ($env:GITHUB_REF_NAME) {
+                $matchesRef = ($env:GITHUB_REF_NAME -eq $baseName -or $env:GITHUB_REF_NAME.StartsWith("$baseName-"))
+              }
+
+              ($tier -eq 'tooling') -or
+                ($tier -eq 'model-small' -and ($isMainPush -or $isScheduled -or $isManual -or $matchesRef)) -or
+                ($tier -eq 'model-large' -and ($isScheduled -or $isManual -or $matchesRef))
+            })
+
             foreach ($entry in $include) {
-              if ($entry.package -match 'openai-gpt-oss-20b\.ps1$') {
+              $tier = if ($entry.tier) { [string]$entry.tier } else { 'tooling' }
+              if ($tier -eq 'model-large') {
                 $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
                 $entry.pkg_root = '/mnt/toolchains-pkg'
                 $entry.cache_path = '/mnt/toolchains-pkg/cache'
@@ -91,8 +109,19 @@ jobs:
           $raw = (ConvertTo-Json @{ include = $include } -Depth 50 -Compress)
           "matrix=$raw" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+  test:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Toolchains scripts
+        shell: pwsh
+        run: .\scripts\test-toolchains.ps1
+
   build:
-    needs: init
+    needs: [init, test]
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -192,6 +221,13 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $binaryPath
           & chmod +x $binaryPath
           "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify Docker daemon
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          docker version
+          docker info
 
       - name: Login to DockerHub
         uses: docker/login-action@v3

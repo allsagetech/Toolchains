@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 $global:TlcPackageConfig = @{
 	Name = 'qwen2.5-0.5b-instruct'
 	RunsOn = 'ubuntu-latest'
+	Tier = 'model-small'
 }
 
 function global:Install-TlcPackage {

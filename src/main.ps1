@@ -14,6 +14,25 @@ function Test-TlcHostIsWindows {
 	return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 }
 
+function Get-TlcDefaultWindowsDockerRunner {
+	return @('self-hosted', 'windows', 'x64', 'toolchains-windows-docker')
+}
+
+function Test-TlcRunsOnUbuntu {
+	param(
+		[Parameter(Mandatory=$true)][object]$RunsOn
+	)
+
+	return [bool](@($RunsOn) | Where-Object { ([string]$_) -like 'ubuntu-*' } | Select-Object -First 1)
+}
+
+function Get-TlcPackageRunsOn {
+	if ($TlcPackageConfig.RunsOn) {
+		return $TlcPackageConfig.RunsOn
+	}
+	return Get-TlcDefaultWindowsDockerRunner
+}
+
 function Clear-TlcPackageScript {
 	Remove-Item Function:\Install-TlcPackage -Force -ErrorAction SilentlyContinue
 	Remove-Item Function:\Test-TlcPackageInstall -Force -ErrorAction SilentlyContinue
@@ -31,6 +50,9 @@ function Test-TlcPackageScript {
 	}
 	if ($TlcPackageConfig.Nonce -and (-not $TlcPackageConfig.Version)) {
 		Write-Error "toolchains: TlcPackageConfig missing version property"
+	}
+	if ($TlcPackageConfig.Tier -and ($TlcPackageConfig.Tier -notin @('tooling', 'model-small', 'model-large'))) {
+		Write-Error "toolchains: unsupported TlcPackageConfig tier: $($TlcPackageConfig.Tier)"
 	}
 }
 
@@ -98,6 +120,9 @@ function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string
 	$args += @($pkgRoot)
 
 	& docker @args
+	if ($LASTEXITCODE -ne 0) {
+		throw "docker build failed with exit code $LASTEXITCODE for $tag"
+	}
 }
 
 
@@ -162,6 +187,8 @@ function Invoke-DockerPush([string]$name, [string]$version) {
 	$safeVer = $version.Replace('+','_')
 	$tag = "${repo}:$name-$safeVer"
 
+	Assert-DockerDaemonAvailable
+
 	if (Test-DockerTagExists $tag) {
 		Write-Host "Skip: $tag already exists"
 		return
@@ -185,6 +212,24 @@ function Invoke-DockerPush([string]$name, [string]$version) {
 	Invoke-CosignSignImage $tag
 
 	Write-Host "Pushed: $tag"
+}
+
+function Assert-DockerDaemonAvailable {
+	$docker = Get-Command 'docker' -ErrorAction SilentlyContinue
+	if (-not $docker) {
+		throw 'docker CLI not found on PATH; cannot build or push toolchain container images.'
+	}
+
+	$prev = $global:PSNativeCommandUseErrorActionPreference
+	$global:PSNativeCommandUseErrorActionPreference = $false
+	try {
+		& docker version --format '{{.Server.Version}}' *> $null
+		if ($LASTEXITCODE -ne 0) {
+			throw "Docker daemon is not available to this runner. Windows packages require a self-hosted Windows runner with Docker/Windows containers enabled; Linux packages require a running Docker service."
+		}
+	} finally {
+		$global:PSNativeCommandUseErrorActionPreference = $prev
+	}
 }
 
 function Invoke-TlcInit {
@@ -246,12 +291,15 @@ function Save-WorkflowMatrix {
 		& $script.FullName
 		Test-TlcPackageScript
 		$scriptPath = $script.FullName.Replace($repoRoot, '.')
-		$runsOn = if ($TlcPackageConfig.RunsOn) { [string]$TlcPackageConfig.RunsOn } else { 'windows-2022' }
-		$pkgRoot = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg' } else { 'D:\pkg' }
-		$cachePath = if ($runsOn -like 'ubuntu-*') { '/mnt/toolchains-pkg/cache' } else { 'D:\pkg\cache' }
+		$runsOn = Get-TlcPackageRunsOn
+		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
+		$isUbuntuRunner = Test-TlcRunsOnUbuntu -RunsOn $runsOn
+		$pkgRoot = if ($isUbuntuRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
+		$cachePath = if ($isUbuntuRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
 		$entry = @{
 			package    = $scriptPath
 			runs_on    = $runsOn
+			tier       = $tier
 			pkg_root   = $pkgRoot
 			cache_path = $cachePath
 		}

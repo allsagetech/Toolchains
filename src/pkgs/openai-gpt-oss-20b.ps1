@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 $global:TlcPackageConfig = @{
 	Name = 'openai-gpt-oss-20b'
 	RunsOn = 'ubuntu-latest'
+	Tier = 'model-large'
 }
 
 function global:Invoke-HuggingFaceSnapshotDownload {

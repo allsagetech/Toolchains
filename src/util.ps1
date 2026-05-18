@@ -241,6 +241,252 @@ function Get-TlcHfModelVersion {
 	return '{0}.{1}.{2}+{3}' -f $lastModified.Year, $lastModified.Month, $lastModified.Day, $buildComponent
 }
 
+function Get-TlcHfModelAllowPatterns {
+	return @(
+		'LICENSE'
+		'LICENSE.*'
+		'README.md'
+		'USAGE_POLICY'
+		'chat_template.jinja'
+		'config.json'
+		'generation_config.json'
+		'merges.txt'
+		'model.safetensors'
+		'model-*.safetensors'
+		'*.safetensors.index.json'
+		'special_tokens_map.json'
+		'tokenizer.json'
+		'tokenizer.model'
+		'tokenizer_config.json'
+		'vocab.*'
+	)
+}
+
+function Invoke-TlcHfSnapshotDownload {
+	param(
+		[Parameter(Mandatory=$true)][string]$PythonPath,
+		[Parameter(Mandatory=$true)][string]$Repo,
+		[Parameter(Mandatory=$true)][string]$CacheDir,
+		[string]$Revision,
+		[string[]]$AllowPatterns
+	)
+
+	$downloadScriptPath = [System.IO.Path]::GetTempFileName()
+	$stdoutPath = [System.IO.Path]::GetTempFileName()
+	$stderrPath = [System.IO.Path]::GetTempFileName()
+	$oldRepo = $env:TLC_HF_REPO_ID
+	$oldRevision = $env:TLC_HF_REVISION
+	$oldAllowPatterns = $env:TLC_HF_ALLOW_PATTERNS
+	$oldHubCache = $env:HF_HUB_CACHE
+
+	try {
+		$downloadScript = @'
+import os
+from huggingface_hub import snapshot_download
+
+repo_id = os.environ["TLC_HF_REPO_ID"]
+revision = os.environ.get("TLC_HF_REVISION") or None
+allow_patterns = [item for item in os.environ.get("TLC_HF_ALLOW_PATTERNS", "").splitlines() if item]
+token = os.environ.get("HF_TOKEN") or None
+
+path = snapshot_download(
+    repo_id=repo_id,
+    revision=revision,
+    cache_dir=os.environ["HF_HUB_CACHE"],
+    token=token,
+    allow_patterns=allow_patterns or None,
+)
+
+print(path, flush=True)
+'@
+		Set-Content -LiteralPath $downloadScriptPath -Value $downloadScript -NoNewline
+
+		$env:TLC_HF_REPO_ID = $Repo
+		$env:TLC_HF_REVISION = $Revision
+		$env:TLC_HF_ALLOW_PATTERNS = if ($AllowPatterns) { ($AllowPatterns -join "`n") } else { $null }
+		$env:HF_HUB_CACHE = $CacheDir
+
+		$downloadProc = Start-Process -FilePath $PythonPath `
+			-ArgumentList @('-u', $downloadScriptPath) `
+			-PassThru `
+			-RedirectStandardOutput $stdoutPath `
+			-RedirectStandardError $stderrPath
+
+		$heartbeat = 0
+		while (-not $downloadProc.HasExited) {
+			Start-Sleep -Seconds 60
+			$downloadProc.Refresh()
+			if (-not $downloadProc.HasExited) {
+				$heartbeat += 1
+				Write-Host ("Hugging Face download still running (heartbeat {0}, utc={1})." -f $heartbeat, ([datetime]::UtcNow.ToString('o')))
+			}
+		}
+
+		if (Test-Path -LiteralPath $stdoutPath) {
+			Get-Content -LiteralPath $stdoutPath | ForEach-Object { Write-Host $_ }
+		}
+		if (Test-Path -LiteralPath $stderrPath) {
+			Get-Content -LiteralPath $stderrPath | ForEach-Object { Write-Host $_ }
+		}
+
+		if ($downloadProc.ExitCode -ne 0) {
+			throw "snapshot_download $Repo failed with exit code $($downloadProc.ExitCode)."
+		}
+	}
+	finally {
+		$env:TLC_HF_REPO_ID = $oldRepo
+		$env:TLC_HF_REVISION = $oldRevision
+		$env:TLC_HF_ALLOW_PATTERNS = $oldAllowPatterns
+		$env:HF_HUB_CACHE = $oldHubCache
+
+		foreach ($path in @($downloadScriptPath, $stdoutPath, $stderrPath)) {
+			if ($path -and (Test-Path -LiteralPath $path)) {
+				Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+			}
+		}
+	}
+}
+
+function ConvertTo-TlcDockerPath {
+	param(
+		[Parameter(Mandatory=$true)][string]$Path
+	)
+
+	return $Path.Replace('\', '/').TrimStart('/')
+}
+
+function Get-TlcRelativePath {
+	param(
+		[Parameter(Mandatory=$true)][string]$Root,
+		[Parameter(Mandatory=$true)][string]$Path
+	)
+
+	$rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+	$pathFull = [System.IO.Path]::GetFullPath($Path)
+	try {
+		return [System.IO.Path]::GetRelativePath($rootFull, $pathFull)
+	} catch {
+		if (-not $pathFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+			throw "Path is not under root. Root: $rootFull Path: $pathFull"
+		}
+		return $pathFull.Substring($rootFull.Length).TrimStart('\', '/')
+	}
+}
+
+function Add-TlcDockerCopyLine {
+	param(
+		[Parameter(Mandatory=$true)][System.Collections.ArrayList]$Lines,
+		[Parameter(Mandatory=$true)][string]$Source,
+		[Parameter(Mandatory=$true)][string]$Destination
+	)
+
+	$src = ConvertTo-TlcDockerPath -Path $Source
+	$dst = '/' + (ConvertTo-TlcDockerPath -Path $Destination)
+	$Lines.Add("COPY `"$src`" `"$dst`"") | Out-Null
+}
+
+function Write-HfModelDockerIgnore {
+	param(
+		[Parameter(Mandatory=$true)][string]$PkgRoot
+	)
+
+	$dockerIgnorePath = Join-Path $PkgRoot '.dockerignore'
+	$lines = @(
+		'.hf-tools',
+		'cache/hf-xet'
+	)
+	Set-Content -LiteralPath $dockerIgnorePath -Value ($lines -join "`n") -NoNewline
+}
+
+function Write-HfModelLayeredDockerfile {
+	param(
+		[Parameter(Mandatory=$true)][string]$PkgRoot,
+		[Parameter(Mandatory=$true)][string]$CacheRoot,
+		[Parameter(Mandatory=$true)][string]$CacheSlug
+	)
+
+	$cacheCandidates = @(
+		(Join-Path $CacheRoot $CacheSlug),
+		(Join-Path (Join-Path $CacheRoot 'hub') $CacheSlug)
+	) | Select-Object -Unique
+	$modelCacheRoot = $cacheCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 1
+	if (-not $modelCacheRoot) {
+		throw "Downloaded Hugging Face cache entry not found. Checked: $($cacheCandidates -join ', ')"
+	}
+
+	$blobsPath = Join-Path $modelCacheRoot 'blobs'
+	if (-not (Test-Path -LiteralPath $blobsPath -PathType Container)) {
+		throw "Model blobs directory not found: $blobsPath"
+	}
+
+	$blobFiles = Get-ChildItem -LiteralPath $blobsPath -File | Sort-Object Name
+	if ($blobFiles.Count -eq 0) {
+		throw "No model blobs found in: $blobsPath"
+	}
+
+	$safeName = ([string]$TlcPackageConfig.Name) -replace '[^A-Za-z0-9_.-]', '-'
+	$dockerfilePath = Join-Path $PkgRoot "Dockerfile.hf-model-$safeName"
+	$dockerLines = [System.Collections.ArrayList]::new()
+	$dockerLines.Add('FROM ubuntu:22.04') | Out-Null
+	Add-TlcDockerCopyLine -Lines $dockerLines -Source '.tlc' -Destination '.tlc'
+	Add-TlcDockerCopyLine -Lines $dockerLines -Source 'official-models.manifest.json' -Destination 'official-models.manifest.json'
+
+	foreach ($dirName in @('refs', 'snapshots')) {
+		$dirPath = Join-Path $modelCacheRoot $dirName
+		if (Test-Path -LiteralPath $dirPath -PathType Container) {
+			$relPath = Get-TlcRelativePath -Root $PkgRoot -Path $dirPath
+			Add-TlcDockerCopyLine -Lines $dockerLines -Source $relPath -Destination $relPath
+		}
+	}
+
+	foreach ($blobFile in $blobFiles) {
+		$relPath = Get-TlcRelativePath -Root $PkgRoot -Path $blobFile.FullName
+		Add-TlcDockerCopyLine -Lines $dockerLines -Source $relPath -Destination $relPath
+	}
+
+	Set-Content -LiteralPath $dockerfilePath -Value ($dockerLines -join "`n") -NoNewline
+	Write-HfModelDockerIgnore -PkgRoot $PkgRoot
+	return $dockerfilePath
+}
+
+function Invoke-HfModelLayeredDockerBuild {
+	param(
+		[Parameter(Mandatory=$true)][string]$Tag,
+		[Parameter(Mandatory=$true)][string]$DockerfilePath
+	)
+
+	$pkgRoot = Get-TlcPkgRoot
+	if (-not (Test-Path -LiteralPath $pkgRoot)) {
+		throw "Package root does not exist: $pkgRoot"
+	}
+	if (-not (Test-Path -LiteralPath $DockerfilePath -PathType Leaf)) {
+		throw "Layered Dockerfile not found: $DockerfilePath"
+	}
+
+	$null = Assert-TlcDefinitionFile
+	$defPath = Join-Path $pkgRoot '.tlc'
+	$defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
+	$args = @('build', '-f', $DockerfilePath, '-t', $Tag)
+	$labels = @(
+		"io.allsagetech.toolchain.packageName=$($TlcPackageConfig.Name)",
+		"io.allsagetech.toolchain.packageVersion=$($TlcPackageConfig.Version)",
+		'io.allsagetech.toolchain.specVersion=1',
+		'io.allsagetech.toolchain.tlcPath=/.tlc',
+		"io.allsagetech.toolchain.tlcSha256=$defHash",
+		'toolchain.tlcPath=/.tlc',
+		"toolchain.tlcSha256=$defHash"
+	)
+	foreach ($label in $labels) {
+		$args += @('--label', $label)
+	}
+	$args += @($pkgRoot)
+
+	& docker @args
+	if ($LASTEXITCODE -ne 0) {
+		throw "docker build failed with exit code $LASTEXITCODE for $Tag"
+	}
+}
+
 function Install-HfModelPackage {
 	param(
 		[Parameter(Mandatory=$true)][hashtable]$Model
@@ -254,6 +500,7 @@ function Install-HfModelPackage {
 	$officialModel = if ($Model.OfficialModel) { [string]$Model.OfficialModel } else { $repo }
 	$cacheSlug = if ($Model.CacheSlug) { [string]$Model.CacheSlug } else { Get-TlcHfModelCacheSlug -Repo $repo }
 	$requiresHfToken = [bool]$Model.RequiresHfToken
+	$allowPatterns = if ($Model.AllowPatterns) { [string[]]$Model.AllowPatterns } else { Get-TlcHfModelAllowPatterns }
 
 	$isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 	if ($isWindowsHost) {
@@ -290,19 +537,23 @@ function Install-HfModelPackage {
 	$pkgRoot = Get-TlcPkgRoot
 	New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null
 
-	$cacheRoot = Join-Path $pkgRoot 'hf-cache'
+	$persistentCacheRoot = Join-Path $pkgRoot 'cache'
+	$legacyCacheRoot = Join-Path $pkgRoot 'hf-cache'
+	$cacheRoot = Join-Path $persistentCacheRoot 'hf-cache'
+	$xetCacheRoot = Join-Path $persistentCacheRoot 'hf-xet'
 	$manifestPath = Join-Path $pkgRoot 'official-models.manifest.json'
 	$toolRoot = Join-Path $pkgRoot '.hf-tools'
 	$venvRoot = Join-Path $toolRoot 'venv'
 
-	foreach ($path in @($cacheRoot, $toolRoot)) {
+	foreach ($path in @($legacyCacheRoot, $toolRoot)) {
 		if (Test-Path -LiteralPath $path) {
 			Remove-Item -LiteralPath $path -Recurse -Force
 		}
 	}
 
-	New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
-	New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+	foreach ($path in @($persistentCacheRoot, $cacheRoot, $xetCacheRoot, $toolRoot)) {
+		New-Item -ItemType Directory -Path $path -Force | Out-Null
+	}
 
 	& $python.Source -m venv $venvRoot
 	if ($LASTEXITCODE -ne 0) {
@@ -324,26 +575,41 @@ function Install-HfModelPackage {
 		throw "pip install huggingface_hub failed with exit code $LASTEXITCODE."
 	}
 
-	$hfCliCandidates = @(
-		(Join-Path $venvRoot 'bin/hf'),
-		(Join-Path $venvRoot 'bin/huggingface-cli')
-	)
-	$hfCli = $hfCliCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-	if (-not $hfCli) {
-		throw "Could not find Hugging Face CLI in virtual environment. Checked: $($hfCliCandidates -join ', ')"
-	}
+	$oldHfHome = $env:HF_HOME
+	$oldHubCache = $env:HF_HUB_CACHE
+	$oldTransformersCache = $env:TRANSFORMERS_CACHE
+	$oldXetCache = $env:HF_XET_CACHE
+	$oldXetHighPerformance = $env:HF_XET_HIGH_PERFORMANCE
+	$oldDownloadTimeout = $env:HF_HUB_DOWNLOAD_TIMEOUT
+	$oldEtagTimeout = $env:HF_HUB_ETAG_TIMEOUT
+	try {
+		$env:HF_HOME = $cacheRoot
+		$env:HF_HUB_CACHE = $cacheRoot
+		$env:TRANSFORMERS_CACHE = $cacheRoot
+		$env:HF_XET_CACHE = $xetCacheRoot
+		$env:HF_XET_HIGH_PERFORMANCE = '1'
+		if (-not $env:HF_HUB_DOWNLOAD_TIMEOUT) {
+			$env:HF_HUB_DOWNLOAD_TIMEOUT = '600'
+		}
+		if (-not $env:HF_HUB_ETAG_TIMEOUT) {
+			$env:HF_HUB_ETAG_TIMEOUT = '30'
+		}
 
-	$downloadArgs = @('download', $repo, '--cache-dir', $cacheRoot)
-	if ($Model.Revision) {
-		$downloadArgs += @('--revision', [string]$Model.Revision)
+		Invoke-TlcHfSnapshotDownload `
+			-PythonPath $venvPython `
+			-Repo $repo `
+			-CacheDir $cacheRoot `
+			-Revision $(if ($Model.Revision) { [string]$Model.Revision } else { $null }) `
+			-AllowPatterns $allowPatterns
 	}
-	if ($env:HF_TOKEN) {
-		$downloadArgs += @('--token', $env:HF_TOKEN)
-	}
-
-	& $hfCli @downloadArgs
-	if ($LASTEXITCODE -ne 0) {
-		throw "huggingface-cli download $repo failed with exit code $LASTEXITCODE."
+	finally {
+		$env:HF_HOME = $oldHfHome
+		$env:HF_HUB_CACHE = $oldHubCache
+		$env:TRANSFORMERS_CACHE = $oldTransformersCache
+		$env:HF_XET_CACHE = $oldXetCache
+		$env:HF_XET_HIGH_PERFORMANCE = $oldXetHighPerformance
+		$env:HF_HUB_DOWNLOAD_TIMEOUT = $oldDownloadTimeout
+		$env:HF_HUB_ETAG_TIMEOUT = $oldEtagTimeout
 	}
 
 	$manifest = [pscustomobject]@{
@@ -364,14 +630,16 @@ function Install-HfModelPackage {
 
 	Write-TlcVars @{
 		env = @{
-			HF_HOME                    = '${.}/hf-cache'
-			HF_HUB_CACHE               = '${.}/hf-cache'
-			TRANSFORMERS_CACHE         = '${.}/hf-cache'
-			LOCAL_CODEX_HF_CACHE_SEED  = '${.}/hf-cache'
+			HF_HOME                    = '${.}/cache/hf-cache'
+			HF_HUB_CACHE               = '${.}/cache/hf-cache'
+			TRANSFORMERS_CACHE         = '${.}/cache/hf-cache'
+			LOCAL_CODEX_HF_CACHE_SEED  = '${.}/cache/hf-cache'
 			LOCAL_CODEX_MODEL_MANIFEST = '${.}/official-models.manifest.json'
 			LOCAL_CODEX_OFFICIAL_MODEL = $officialModel
 		}
 	}
+
+	$null = Write-HfModelLayeredDockerfile -PkgRoot $pkgRoot -CacheRoot $cacheRoot -CacheSlug $cacheSlug
 }
 
 function Test-HfModelPackageInstall {
@@ -417,61 +685,23 @@ function Invoke-HfModelCustomDockerBuild($tag) {
 		throw "Package root does not exist: $pkgRoot"
 	}
 
-	$null = Assert-TlcDefinitionFile
-	$defPath = Join-Path $pkgRoot '.tlc'
-	$defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
 	$safeName = ([string]$TlcPackageConfig.Name) -replace '[^A-Za-z0-9_.-]', '-'
-	$containerName = "toolchains-$safeName-" + [Guid]::NewGuid().ToString('n')
-	$containerId = $null
-
-	try {
-		$containerId = (& docker create --name $containerName ubuntu:22.04 2>$null | Out-String).Trim()
-		if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
-			throw "docker create failed for $($TlcPackageConfig.Name) image assembly."
+	$dockerfilePath = Join-Path $pkgRoot "Dockerfile.hf-model-$safeName"
+	if (-not (Test-Path -LiteralPath $dockerfilePath -PathType Leaf)) {
+		$manifestPath = Join-Path $pkgRoot 'official-models.manifest.json'
+		if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+			throw "Model manifest not found: $manifestPath"
 		}
-
-		& docker cp "$pkgRoot/." "${containerId}:/"
-		if ($LASTEXITCODE -ne 0) {
-			throw "docker cp failed (exit code $LASTEXITCODE) for $containerId"
+		$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+		$model = @($manifest.models) | Select-Object -First 1
+		if (-not $model.cache_slug) {
+			throw "Model manifest is missing cache_slug: $manifestPath"
 		}
-
-		$changes = @(
-			'LABEL io.allsagetech.toolchain.specVersion=1',
-			"LABEL io.allsagetech.toolchain.packageName=$($TlcPackageConfig.Name)",
-			"LABEL io.allsagetech.toolchain.packageVersion=$($TlcPackageConfig.Version)",
-			'LABEL io.allsagetech.toolchain.tlcPath=/.tlc',
-			"LABEL io.allsagetech.toolchain.tlcSha256=$defHash",
-			'LABEL toolchain.tlcPath=/.tlc',
-			"LABEL toolchain.tlcSha256=$defHash"
-		)
-
-		$scriptPath = [System.IO.Path]::GetTempFileName()
-		try {
-			$scriptLines = @('set -euo pipefail')
-			$importLine = "docker export '$containerId' | docker import"
-			foreach ($change in $changes) {
-				$importLine += " --change '$change'"
-			}
-			$importLine += " - '$tag'"
-			$scriptLines += $importLine
-
-			Set-Content -LiteralPath $scriptPath -Value ($scriptLines -join "`n") -NoNewline
-			& bash $scriptPath
-			if ($LASTEXITCODE -ne 0) {
-				throw "docker import failed (exit code $LASTEXITCODE) for $containerId"
-			}
-		}
-		finally {
-			Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
-		}
+		$cacheRoot = Join-Path $pkgRoot 'cache/hf-cache'
+		$dockerfilePath = Write-HfModelLayeredDockerfile -PkgRoot $pkgRoot -CacheRoot $cacheRoot -CacheSlug ([string]$model.cache_slug)
 	}
-	finally {
-		if ($containerId) {
-			& docker rm -f $containerId *> $null
-		} else {
-			& docker rm -f $containerName *> $null
-		}
-	}
+
+	Invoke-HfModelLayeredDockerBuild -Tag $tag -DockerfilePath $dockerfilePath
 }
 
 
@@ -569,6 +799,79 @@ function Install-BuildTool {
 	Write-Output "downloading $AssetURL to $Asset"
 	Invoke-TlcWebRequest -Uri $AssetURL -OutFile $Asset
 	Expand-Archive $Asset $ToolDir
+}
+
+function Get-DotNetReleaseAsset {
+	param(
+		[Parameter(Mandatory=$true)][ValidateSet('sdk', 'runtime')][string]$Product,
+		[string]$Rid = 'win-x64',
+		[string]$Extension = '.zip',
+		[switch]$IncludePreview
+	)
+
+	$index = Invoke-TlcRestMethod -Uri 'https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json'
+	$channels = @($index.'releases-index') | Where-Object {
+		$phase = [string]$_.'support-phase'
+		($phase -ne 'eol') -and ($IncludePreview -or $phase -ne 'preview')
+	} | Sort-Object -Property @{
+		Expression = {
+			$parts = ([string]$_.'channel-version').Split('.')
+			[version]::new([int]$parts[0], [int]$parts[1], 0)
+		}
+		Descending = $true
+	}
+
+	foreach ($channel in $channels) {
+		$releaseData = Invoke-TlcRestMethod -Uri ([string]$channel.'releases.json')
+		$releases = @($releaseData.releases) | Sort-Object -Property @{
+			Expression = {
+				try { [datetime]::Parse([string]$_.'release-date') } catch { [datetime]::MinValue }
+			}
+			Descending = $true
+		}
+
+		foreach ($release in $releases) {
+			$assets = @()
+			if ($Product -eq 'sdk') {
+				if ($release.sdk) { $assets += $release.sdk }
+				if ($release.sdks) { $assets += @($release.sdks) }
+			} else {
+				if ($release.runtime) { $assets += $release.runtime }
+			}
+
+			foreach ($asset in $assets) {
+				$version = [string]$asset.version
+				if ([string]::IsNullOrWhiteSpace($version)) { continue }
+				if ((-not $IncludePreview) -and $version.Contains('-')) { continue }
+
+				$file = @($asset.files) | Where-Object {
+					([string]$_.rid) -eq $Rid -and
+					([string]$_.url) -and
+					([string]$_.url).EndsWith($Extension, [System.StringComparison]::OrdinalIgnoreCase)
+				} | Select-Object -First 1
+				if (-not $file) { continue }
+
+				$name = [string]$file.name
+				if ([string]::IsNullOrWhiteSpace($name)) {
+					try { $name = [IO.Path]::GetFileName(([Uri][string]$file.url).AbsolutePath) } catch { }
+				}
+				if ([string]::IsNullOrWhiteSpace($name)) {
+					$name = "dotnet-$Product-$version-$Rid$Extension"
+				}
+
+				return @{
+					Name = $name
+					URL = [string]$file.url
+					Version = [TlcSemanticVersion]::new($version)
+					VersionText = $version
+					ChannelVersion = [string]$channel.'channel-version'
+					ReleaseDate = [string]$release.'release-date'
+				}
+			}
+		}
+	}
+
+	throw "Failed to find a .NET $Product $Rid$Extension release asset from official release metadata."
 }
 
 

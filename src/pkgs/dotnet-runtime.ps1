@@ -10,22 +10,15 @@ $global:TlcPackageConfig = @{
 }
 
 function global:Install-TlcPackage {
-	$Params = @{
-		Owner = 'dotnet'
-		Repo = 'runtime'
-		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
-	}
-	$Latest = Get-GitHubTag @Params
+	$Latest = Get-DotNetReleaseAsset -Product 'runtime' -Rid 'win-x64' -Extension '.zip'
 	$TlcPackageConfig.UpToDate = -not $Latest.Version.LaterThan($TlcPackageConfig.Latest)
-	$TlcPackageConfig.Version = $Latest.Version.ToString()
+	$TlcPackageConfig.Version = $Latest.VersionText
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	$Tag = $Latest.name
-	$Version = $Tag.SubString(1)
 	$Params = @{
-		AssetName = "dotnet-$Version.zip"
-		AssetURL = "https://builds.dotnet.microsoft.com/dotnet/Runtime/$Version/dotnet-runtime-$Version-win-x64.zip"
+		AssetName = $Latest.Name
+		AssetURL = $Latest.URL
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
