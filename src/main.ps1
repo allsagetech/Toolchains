@@ -19,7 +19,7 @@ function Get-TlcDefaultWindowsRunner {
 }
 
 function Get-TlcDefaultWindowsDockerRunner {
-	return @('self-hosted', 'windows', 'x64', 'toolchains-windows-docker')
+	return Get-TlcDefaultWindowsRunner
 }
 
 function Test-TlcRunsOnUbuntu {
@@ -241,7 +241,7 @@ function Assert-DockerDaemonAvailable {
 	try {
 		& docker version --format '{{.Server.Version}}' *> $null
 		if ($LASTEXITCODE -ne 0) {
-			throw "Docker daemon is not available to this runner. Windows packages require a self-hosted Windows runner with Docker/Windows containers enabled; Linux packages require a running Docker service."
+			throw "Docker daemon is not available to this runner. Package publishing requires a runner with a working Docker service."
 		}
 	} finally {
 		$global:PSNativeCommandUseErrorActionPreference = $prev

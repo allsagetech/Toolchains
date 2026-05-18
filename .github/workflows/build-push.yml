@@ -41,7 +41,6 @@ jobs:
         env:
           TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
           GH_TOKEN: ${{ github.token }}
-          ENABLE_WINDOWS_DOCKER_PUBLISH: ${{ vars.ENABLE_WINDOWS_DOCKER_PUBLISH }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -114,12 +113,6 @@ jobs:
               }
             }
 
-            $enableWindowsDockerPublish = ($env:ENABLE_WINDOWS_DOCKER_PUBLISH -eq 'true')
-            if (-not $enableWindowsDockerPublish) {
-              $include = @($include | Where-Object {
-                Test-TlcRunsOnUbuntu -RunsOn $_.publish_runs_on
-              })
-            }
           }
 
           $raw = (ConvertTo-Json @{ include = $include } -Depth 50 -Compress)
