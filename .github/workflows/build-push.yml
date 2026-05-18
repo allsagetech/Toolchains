@@ -41,6 +41,7 @@ jobs:
         env:
           TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
           GH_TOKEN: ${{ github.token }}
+          ENABLE_WINDOWS_DOCKER_PUBLISH: ${{ vars.ENABLE_WINDOWS_DOCKER_PUBLISH }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -58,15 +59,20 @@ jobs:
               & $script.FullName
               Test-TlcPackageScript
 
-              $runsOn = if ($TlcPackageConfig.RunsOn) { $TlcPackageConfig.RunsOn } else { Get-TlcDefaultWindowsDockerRunner }
+              $runsOn = if ($TlcPackageConfig.RunsOn) { $TlcPackageConfig.RunsOn } else { Get-TlcDefaultWindowsRunner }
+              $publishRunsOn = if ($TlcPackageConfig.PublishRunsOn) { $TlcPackageConfig.PublishRunsOn } elseif (Test-TlcRunsOnUbuntu -RunsOn $runsOn) { $runsOn } else { Get-TlcDefaultWindowsDockerRunner }
               $tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
               $isUbuntuRunner = Test-TlcRunsOnUbuntu -RunsOn $runsOn
+              $isUbuntuPublishRunner = Test-TlcRunsOnUbuntu -RunsOn $publishRunsOn
               [pscustomobject]@{
-                package    = $script.FullName.Replace((Get-Location).Path, '.')
-                runs_on    = $runsOn
-                tier       = $tier
-                pkg_root   = if ($isUbuntuRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
-                cache_path = if ($isUbuntuRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
+                package            = $script.FullName.Replace((Get-Location).Path, '.')
+                runs_on            = $runsOn
+                publish_runs_on    = $publishRunsOn
+                tier               = $tier
+                pkg_root           = if ($isUbuntuRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
+                cache_path         = if ($isUbuntuRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
+                publish_pkg_root   = if ($isUbuntuPublishRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
+                publish_cache_path = if ($isUbuntuPublishRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
               }
             }
             Clear-TlcPackageScript
@@ -100,9 +106,19 @@ jobs:
               $tier = if ($entry.tier) { [string]$entry.tier } else { 'tooling' }
               if ($tier -eq 'model-large') {
                 $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
+                $entry.publish_runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
                 $entry.pkg_root = '/mnt/toolchains-pkg'
                 $entry.cache_path = '/mnt/toolchains-pkg/cache'
+                $entry.publish_pkg_root = '/mnt/toolchains-pkg'
+                $entry.publish_cache_path = '/mnt/toolchains-pkg/cache'
               }
+            }
+
+            $enableWindowsDockerPublish = ($env:ENABLE_WINDOWS_DOCKER_PUBLISH -eq 'true')
+            if (-not $enableWindowsDockerPublish) {
+              $include = @($include | Where-Object {
+                Test-TlcRunsOnUbuntu -RunsOn $_.publish_runs_on
+              })
             }
           }
 
@@ -182,59 +198,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: .\scripts\install-toolchain.ps1
 
-      - name: Prepare Docker Storage (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_root="/mnt/docker-data"
-          sudo systemctl stop docker
-          sudo rm -rf /var/lib/docker
-          sudo mkdir -p "$docker_root"
-          sudo ln -s "$docker_root" /var/lib/docker
-          sudo systemctl start docker
-          docker info > /dev/null
-
-      - name: Install Cosign (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = 'v2.6.0'
-          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-windows-amd64.exe"
-          $installDir = "$env:ProgramFiles\cosign"
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile "$installDir\cosign.exe"
-          # Ensure cosign is on PATH for subsequent steps
-          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install Cosign (Linux)
-        if: runner.os == 'Linux'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = 'v2.6.0'
-          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-linux-amd64"
-          $installDir = Join-Path $env:RUNNER_TEMP 'cosign'
-          $binaryPath = Join-Path $installDir 'cosign'
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile $binaryPath
-          & chmod +x $binaryPath
-          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Verify Docker daemon
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          docker version
-          docker info
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Run ${{ matrix.package }}
         id: pkg
         shell: pwsh
@@ -289,26 +252,159 @@ jobs:
           . .\src\main.ps1
           Invoke-TlcPackageScan
 
-      - name: Build and push container
-        if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && steps.pkg.outputs.up-to-date == 'False' }}
+  publish:
+    needs: [init, test, build]
+    if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) }}
+    runs-on: ${{ matrix.publish_runs_on }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.init.outputs.matrix) }}
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+      TLC_PKG_ROOT: ${{ matrix.publish_pkg_root }}
+      TLC_COSIGN_SIGN: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Package Storage (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/toolchains-pkg/cache
+          sudo chown -R "$(id -u):$(id -g)" /mnt/toolchains-pkg
+
+      - name: Ensure cache directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.publish_cache_path }}
+          key: tlc-publish-cache-${{ runner.os }}-${{ github.ref_name }}-${{ hashFiles('src/util.ps1', 'src/pkgs/**') }}
+          restore-keys: |
+            tlc-publish-cache-${{ runner.os }}-${{ github.ref_name }}-
+            tlc-publish-cache-${{ runner.os }}-
+
+      - name: Install Toolchain module
         shell: pwsh
         env:
-          TLC_PKG_ROOT: ${{ matrix.pkg_root }}
+          TOOLCHAIN_REPO: allsagetech/toolchain
+          TOOLCHAIN_REF: pipeline
+          GH_TOKEN: ${{ github.token }}
+        run: .\scripts\install-toolchain.ps1
+
+      - name: Prepare Docker Storage (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_root="/mnt/docker-data"
+          sudo systemctl stop docker
+          sudo rm -rf /var/lib/docker
+          sudo mkdir -p "$docker_root"
+          sudo ln -s "$docker_root" /var/lib/docker
+          sudo systemctl start docker
+          docker info > /dev/null
+
+      - name: Install Cosign (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = 'v2.6.0'
+          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-windows-amd64.exe"
+          $installDir = "$env:ProgramFiles\cosign"
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile "$installDir\cosign.exe"
+          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Cosign (Linux)
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = 'v2.6.0'
+          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-linux-amd64"
+          $installDir = Join-Path $env:RUNNER_TEMP 'cosign'
+          $binaryPath = Join-Path $installDir 'cosign'
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile $binaryPath
+          & chmod +x $binaryPath
+          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify Docker daemon
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          docker version
+          docker info
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish ${{ matrix.package }}
+        id: publish
+        shell: pwsh
+        env:
+          TLC_PKG_ROOT: ${{ matrix.publish_pkg_root }}
           TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:RUNNER_OS -eq 'Windows' -and -not (Test-Path 'C:\pkg')) {
+
+          $scriptRel = '${{ matrix.package }}'
+          $isVsBuildTools = $scriptRel -match 'vs-buildtools\.ps1$'
+
+          if ($isVsBuildTools) {
+            if (Test-Path $env:TLC_PKG_ROOT) { Remove-Item -Recurse -Force $env:TLC_PKG_ROOT }
+          } else {
+            if (Test-Path $env:TLC_PKG_ROOT) {
+              Get-ChildItem -LiteralPath $env:TLC_PKG_ROOT -Force |
+                Where-Object { $_.Name -ne 'cache' } |
+                Remove-Item -Recurse -Force
+            } else {
+              New-Item -ItemType Directory -Path $env:TLC_PKG_ROOT -Force | Out-Null
+            }
+            New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
+          }
+
+          if ($env:RUNNER_OS -eq 'Windows' -and (Test-Path $env:TLC_PKG_ROOT)) {
+            if (Test-Path 'C:\pkg') { Remove-Item -Recurse -Force 'C:\pkg' }
             cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
           }
+
           . .\src\main.ps1
           Clear-TlcPackageScript
-          & (Resolve-Path '${{ steps.pkg.outputs.script }}').Path
-          Test-TlcPackageScript
-          Invoke-DockerPush '${{ steps.pkg.outputs.name }}' '${{ steps.pkg.outputs.version }}'
+
+          $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
+          Invoke-TlcScript $scriptPath
+
+          "script=$scriptRel" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          if ($TlcPackageConfig.UpToDate) {
+            Write-Host "Skip publish: $($TlcPackageConfig.Name) up-to-date"
+            return
+          }
+
+          Invoke-DockerPush $TlcPackageConfig.Name $TlcPackageConfig.Version
 
       - name: Trigger Toolchain contract tests
         continue-on-error: true
-        if: ${{ github.ref == 'refs/heads/main' && steps.pkg.outputs.up-to-date == 'False' }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.publish.outputs.up-to-date == 'False' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -324,8 +420,8 @@ jobs:
             exit 0
           }
 
-          $name    = '${{ steps.pkg.outputs.name }}'
-          $version = '${{ steps.pkg.outputs.version }}'
+          $name    = '${{ steps.publish.outputs.name }}'
+          $version = '${{ steps.publish.outputs.version }}'
           $safeVer = $version.Replace('+','_')
           $repo    = $env:TLC_DOCKER_REPO
           $tag     = "${repo}:$name-$safeVer"

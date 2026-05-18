@@ -14,6 +14,10 @@ function Test-TlcHostIsWindows {
 	return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 }
 
+function Get-TlcDefaultWindowsRunner {
+	return 'windows-2022'
+}
+
 function Get-TlcDefaultWindowsDockerRunner {
 	return @('self-hosted', 'windows', 'x64', 'toolchains-windows-docker')
 }
@@ -29,6 +33,18 @@ function Test-TlcRunsOnUbuntu {
 function Get-TlcPackageRunsOn {
 	if ($TlcPackageConfig.RunsOn) {
 		return $TlcPackageConfig.RunsOn
+	}
+	return Get-TlcDefaultWindowsRunner
+}
+
+function Get-TlcPackagePublishRunsOn {
+	if ($TlcPackageConfig.PublishRunsOn) {
+		return $TlcPackageConfig.PublishRunsOn
+	}
+
+	$runsOn = Get-TlcPackageRunsOn
+	if (Test-TlcRunsOnUbuntu -RunsOn $runsOn) {
+		return $runsOn
 	}
 	return Get-TlcDefaultWindowsDockerRunner
 }
@@ -292,16 +308,23 @@ function Save-WorkflowMatrix {
 		Test-TlcPackageScript
 		$scriptPath = $script.FullName.Replace($repoRoot, '.')
 		$runsOn = Get-TlcPackageRunsOn
+		$publishRunsOn = Get-TlcPackagePublishRunsOn
 		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
 		$isUbuntuRunner = Test-TlcRunsOnUbuntu -RunsOn $runsOn
+		$isUbuntuPublishRunner = Test-TlcRunsOnUbuntu -RunsOn $publishRunsOn
 		$pkgRoot = if ($isUbuntuRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
 		$cachePath = if ($isUbuntuRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
+		$publishPkgRoot = if ($isUbuntuPublishRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
+		$publishCachePath = if ($isUbuntuPublishRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
 		$entry = @{
-			package    = $scriptPath
-			runs_on    = $runsOn
-			tier       = $tier
-			pkg_root   = $pkgRoot
-			cache_path = $cachePath
+			package            = $scriptPath
+			runs_on            = $runsOn
+			publish_runs_on    = $publishRunsOn
+			tier               = $tier
+			pkg_root           = $pkgRoot
+			cache_path         = $cachePath
+			publish_pkg_root   = $publishPkgRoot
+			publish_cache_path = $publishCachePath
 		}
 		$matchesRef = $false
 		if ($refName) {

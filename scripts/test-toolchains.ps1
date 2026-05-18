@@ -75,12 +75,24 @@ function Test-HuggingFaceHelpers {
 function Test-WorkflowRunnerDefaults {
 	. .\src\main.ps1
 
+	Assert-True ((Get-TlcDefaultWindowsRunner) -eq 'windows-2022') 'Default Windows package runner should stay on GitHub-hosted windows-2022.'
+
 	$runner = @(Get-TlcDefaultWindowsDockerRunner)
 	foreach ($label in @('self-hosted', 'windows', 'x64', 'toolchains-windows-docker')) {
 		Assert-True ($runner -contains $label) "Default Windows Docker runner is missing label: $label"
 	}
 	Assert-True (-not (Test-TlcRunsOnUbuntu -RunsOn $runner)) 'Default Windows Docker runner was incorrectly detected as Ubuntu.'
 	Assert-True (Test-TlcRunsOnUbuntu -RunsOn 'ubuntu-latest') 'Ubuntu runner detection failed.'
+
+	Clear-TlcPackageScript
+	$global:TlcPackageConfig = @{ Name = 'test-package' }
+	Assert-True ((Get-TlcPackageRunsOn) -eq 'windows-2022') 'Package install/test default runner should be windows-2022.'
+	Assert-True (@(Get-TlcPackagePublishRunsOn) -contains 'toolchains-windows-docker') 'Package publish default runner should be the Windows Docker runner.'
+	Clear-TlcPackageScript
+
+	$workflow = Get-Content -LiteralPath '.github/workflows/build-push.yml' -Raw
+	Assert-True ($workflow -match 'ENABLE_WINDOWS_DOCKER_PUBLISH') 'Workflow is missing the Windows Docker publish gate.'
+	Assert-True ($workflow -match 'Test-TlcRunsOnUbuntu -RunsOn \$_.publish_runs_on') 'Workflow does not filter disabled Windows Docker publish jobs.'
 
 	Write-Host 'Validated workflow runner defaults.'
 }

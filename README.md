@@ -23,7 +23,7 @@ Model packages seed Hugging Face cache content under `cache/hf-cache` and write 
 
 Package scripts can declare `TlcPackageConfig.Tier` as `tooling`, `model-small`, or `model-large`. Pull requests run script validation only; pushes to `main` include tooling plus small models; schedules and manual workflow runs include large models, with large models moved to the self-hosted `toolchains-large` runner.
 
-Default Windows package builds run on a self-hosted runner labeled `self-hosted`, `windows`, `x64`, and `toolchains-windows-docker`. GitHub-hosted Windows runners do not provide the Windows Docker daemon needed to build and push the Nano Server package images.
+Default Windows package install/test jobs run on GitHub-hosted `windows-2022`. Windows Docker publishing is disabled unless the repository variable `ENABLE_WINDOWS_DOCKER_PUBLISH` is set to `true`. When enabled, only the Windows Docker publish phase uses a self-hosted runner labeled `self-hosted`, `windows`, `x64`, and `toolchains-windows-docker`, because GitHub-hosted Windows runners do not provide the Windows Docker daemon needed to build and push the Nano Server package images.
 
 Use the helper script on a Linux host/runner:
 
