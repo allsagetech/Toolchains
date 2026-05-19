@@ -22,6 +22,28 @@ function Get-TlcDefaultWindowsDockerRunner {
 	return Get-TlcDefaultWindowsRunner
 }
 
+function Get-TlcPkgRootForRunner {
+	param(
+		[Parameter(Mandatory=$true)][object]$RunsOn
+	)
+
+	if (Test-TlcRunsOnUbuntu -RunsOn $RunsOn) {
+		return '/mnt/toolchains-pkg'
+	}
+	return 'D:\pkg'
+}
+
+function Get-TlcCachePathForRunner {
+	param(
+		[Parameter(Mandatory=$true)][object]$RunsOn
+	)
+
+	if (Test-TlcRunsOnUbuntu -RunsOn $RunsOn) {
+		return '/mnt/toolchains-pkg/cache'
+	}
+	return 'D:\pkg\cache'
+}
+
 function Test-TlcRunsOnUbuntu {
 	param(
 		[Parameter(Mandatory=$true)][object]$RunsOn
@@ -310,21 +332,15 @@ function Save-WorkflowMatrix {
 		$runsOn = Get-TlcPackageRunsOn
 		$publishRunsOn = Get-TlcPackagePublishRunsOn
 		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-		$isUbuntuRunner = Test-TlcRunsOnUbuntu -RunsOn $runsOn
-		$isUbuntuPublishRunner = Test-TlcRunsOnUbuntu -RunsOn $publishRunsOn
-		$pkgRoot = if ($isUbuntuRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
-		$cachePath = if ($isUbuntuRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
-		$publishPkgRoot = if ($isUbuntuPublishRunner) { '/mnt/toolchains-pkg' } else { 'C:\toolchains-pkg' }
-		$publishCachePath = if ($isUbuntuPublishRunner) { '/mnt/toolchains-pkg/cache' } else { 'C:\toolchains-pkg\cache' }
 		$entry = @{
 			package            = $scriptPath
 			runs_on            = $runsOn
 			publish_runs_on    = $publishRunsOn
 			tier               = $tier
-			pkg_root           = $pkgRoot
-			cache_path         = $cachePath
-			publish_pkg_root   = $publishPkgRoot
-			publish_cache_path = $publishCachePath
+			pkg_root           = Get-TlcPkgRootForRunner -RunsOn $runsOn
+			cache_path         = Get-TlcCachePathForRunner -RunsOn $runsOn
+			publish_pkg_root   = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn
+			publish_cache_path = Get-TlcCachePathForRunner -RunsOn $publishRunsOn
 		}
 		$matchesRef = $false
 		if ($refName) {

@@ -204,6 +204,10 @@ function Write-TlcVars($vars) {
 
 	$text = [regex]::Replace($text, '(?i)(?<![A-Za-z]:)\\\\pkg', '${.}')
 
+	if (-not (Test-Path -LiteralPath $pkgRoot -PathType Container)) {
+		New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null
+	}
+
 	[IO.File]::WriteAllText((Join-Path $pkgRoot '.tlc'), $text)
 }
 

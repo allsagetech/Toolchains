@@ -81,6 +81,10 @@ function Test-WorkflowRunnerDefaults {
 	Assert-True (($runner.Count -eq 1) -and ($runner[0] -eq 'windows-2022')) 'Default Windows Docker runner should be GitHub-hosted windows-2022.'
 	Assert-True (-not (Test-TlcRunsOnUbuntu -RunsOn $runner)) 'Default Windows Docker runner was incorrectly detected as Ubuntu.'
 	Assert-True (Test-TlcRunsOnUbuntu -RunsOn 'ubuntu-latest') 'Ubuntu runner detection failed.'
+	Assert-True ((Get-TlcPkgRootForRunner -RunsOn 'windows-2022') -eq 'D:\pkg') 'Windows package root should match the package scripts.'
+	Assert-True ((Get-TlcCachePathForRunner -RunsOn 'windows-2022') -eq 'D:\pkg\cache') 'Windows cache path should match the package scripts.'
+	Assert-True ((Get-TlcPkgRootForRunner -RunsOn 'ubuntu-latest') -eq '/mnt/toolchains-pkg') 'Ubuntu package root should use the mounted package directory.'
+	Assert-True ((Get-TlcCachePathForRunner -RunsOn 'ubuntu-latest') -eq '/mnt/toolchains-pkg/cache') 'Ubuntu cache path should use the mounted cache directory.'
 
 	Clear-TlcPackageScript
 	$global:TlcPackageConfig = @{ Name = 'test-package' }
