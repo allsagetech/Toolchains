@@ -306,6 +306,47 @@ jobs:
           sudo systemctl start docker
           docker info > /dev/null
 
+      - name: Start Docker daemon (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $null = Get-Command docker -ErrorAction Stop
+          $service = Get-Service -Name docker -ErrorAction SilentlyContinue
+          if ($service) {
+            if ($service.Status -ne 'Running') {
+              Start-Service -Name docker
+            }
+          } else {
+            $dockerd = Get-Command dockerd -ErrorAction SilentlyContinue
+            if (-not $dockerd) {
+              throw 'Docker CLI is installed, but neither the docker service nor dockerd.exe is available on this runner.'
+            }
+
+            $dockerRoot = Join-Path $env:RUNNER_TEMP 'docker-data'
+            New-Item -ItemType Directory -Path $dockerRoot -Force | Out-Null
+            Start-Process -FilePath $dockerd.Source -ArgumentList @('--host', 'npipe:////./pipe/docker_engine', '--data-root', $dockerRoot) -WindowStyle Hidden
+          }
+
+          $previousNativePreference = $global:PSNativeCommandUseErrorActionPreference
+          $global:PSNativeCommandUseErrorActionPreference = $false
+          try {
+            for ($attempt = 1; $attempt -le 45; $attempt++) {
+              docker info *> $null
+              if ($LASTEXITCODE -eq 0) {
+                docker version
+                docker info
+                exit 0
+              }
+              Start-Sleep -Seconds 2
+            }
+          } finally {
+            $global:PSNativeCommandUseErrorActionPreference = $previousNativePreference
+          }
+
+          throw 'Docker daemon did not become ready on the Windows runner.'
+
       - name: Install Cosign (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
