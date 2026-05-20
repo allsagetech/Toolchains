@@ -16,6 +16,7 @@ Small local model seed packages are available as separate refs so consumers can 
 - `smollm2-135m-instruct:latest` for `HuggingFaceTB/SmolLM2-135M-Instruct`
 - `smollm2-360m-instruct:latest` for `HuggingFaceTB/SmolLM2-360M-Instruct`
 - `qwen2.5-0.5b-instruct:latest` for `Qwen/Qwen2.5-0.5B-Instruct`
+- `qwen2.5-coder-7b-instruct:latest` for `Qwen/Qwen2.5-Coder-7B-Instruct`
 - `qwen3-0.6b:latest` for `Qwen/Qwen3-0.6B`
 - `openai-gpt-oss-20b:latest` for `openai/gpt-oss-20b`
 
