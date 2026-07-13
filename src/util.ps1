@@ -1148,7 +1148,7 @@ function Get-Tlc7ZipExecutable {
 	$proc = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$sevenZipRoot") -PassThru -Wait
 	if ($proc.ExitCode -ne 0) { throw "7-zip bootstrap installer failed with exit code $($proc.ExitCode)" }
 	$exe = Get-ChildItem -Path $sevenZipRoot -Recurse -Filter '7z.exe' -File | Select-Object -First 1
-	if (-not $exe) { throw 'Failed to bootstrap 7z.exe from the signed installer.' }
+	if (-not $exe) { throw 'Failed to bootstrap 7z.exe from the integrity-verified installer.' }
 	$global:Tlc7ZipExecutable = $exe.FullName
 	return $global:Tlc7ZipExecutable
 }

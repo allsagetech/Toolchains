@@ -138,7 +138,7 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($utilText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
 	Assert-True ($workflowText -match '\$TlcPackageConfig\.Tags\s*=\s*@\(\)') 'Forced PR smoke builds do not clear published package tags.'
-	Assert-True ($workflowText -match 'Where-Object \{ \[bool\]\$_\.publish_eligible \}') 'Workflow matrices do not exclude quarantined packages.'
+	Assert-True ($workflowText -match 'Where-Object \{ \[bool\]\$_\.verified_downloads -and \[bool\]\$_\.publish_eligible \}') 'Workflow matrices do not exclude unverified or quarantined packages.'
 	Assert-True ($workflowText -match 'RUNNER_OS -eq ''Linux''[\s\S]+Get-ChildItem -LiteralPath \$full -Force \| Remove-Item') 'Linux package cleanup still removes the protected mount root.'
 	foreach ($optionalX86Script in @(
 		'.\src\pkgs\jdk\jdk8.ps1', '.\src\pkgs\jdk\jdk11.ps1', '.\src\pkgs\jdk\jdk17.ps1',

@@ -91,7 +91,7 @@ jobs:
                 Write-Host "Skipping large-model PR build on a self-hosted runner: $path"
                 continue
               }
-              if (-not [bool]$entry.publish_eligible) {
+              if (-not [bool]$entry.verified_downloads -or -not [bool]$entry.publish_eligible) {
                 Write-Output "::warning file=$path,title=Package quarantined::$($entry.unverified_download_reason)"
                 continue
               }
@@ -102,10 +102,10 @@ jobs:
             $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
             $entries = @($obj.include)
 
-            foreach ($entry in @($entries | Where-Object { -not [bool]$_.publish_eligible })) {
+            foreach ($entry in @($entries | Where-Object { -not [bool]$_.verified_downloads -or -not [bool]$_.publish_eligible })) {
               Write-Output "::warning file=$($entry.package),title=Package quarantined::$($entry.unverified_download_reason)"
             }
-            $entries = @($entries | Where-Object { [bool]$_.publish_eligible })
+            $entries = @($entries | Where-Object { [bool]$_.verified_downloads -and [bool]$_.publish_eligible })
 
             if ($entries.Count -eq 0) {
               Write-Host 'No publication-eligible outdated packages were discovered.'
