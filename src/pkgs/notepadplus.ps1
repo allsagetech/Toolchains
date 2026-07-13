@@ -5,8 +5,7 @@ SPDX-License-Identifier: MPL-2.0
 #>
 
 $global:TlcPackageConfig = @{
-    Name    = 'notepadpp'
-    Matcher = '^npp\.8\.'
+	Name = 'notepadpp'
 }
 
 function global:Install-TlcPackage {
@@ -37,9 +36,9 @@ function global:Install-TlcPackage {
 
     Install-BuildTool @Params
 
-    Write-TlcVars @{
-        env = @{
-            path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'notepad++.exe' |
+	Write-TlcVars @{
+		env = @{
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'notepad++.exe' |
                     Select-Object -First 1).DirectoryName
         }
     }

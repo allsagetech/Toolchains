@@ -24,16 +24,15 @@ function global:Install-TlcPackage {
 	}
 	$git = "$env:Temp\$($Asset.Name)"
 	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile $git
-	Invoke-TlcWebRequest -Uri 'https://www.7-zip.org/a/7za920.zip' -OutFile "$env:temp\7z.zip"
-	Expand-Archive "$env:temp\7z.zip" "$env:temp\7z"
-	& "$env:temp\7z\7za.exe" x -o'\pkg' $git | Out-Null
-	& (Get-ChildItem -Path '\pkg' -Recurse -Include 'git.exe' | Select-Object -First 1) config --system --unset credential.helper
+	$sevenZipExe = Get-Tlc7ZipExecutable
+	& $sevenZipExe x ("-o{0}" -f (Get-TlcPkgRoot)) $git | Out-Null
+	& (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'git.exe' | Select-Object -First 1) config --system --unset credential.helper
 	Write-TlcVars @{
 		env = @{
 			path = (@(
-				(Get-ChildItem -Path '\pkg' -Recurse -Include 'gitk.exe' | Select-Object -First 1).DirectoryName,
-				(Get-ChildItem -Path '\pkg' -Recurse -Include 'sed.exe' | Select-Object -First 1).DirectoryName,
-				(Get-ChildItem -Path '\pkg' -Recurse -Include 'curl.exe' | Select-Object -First 1).DirectoryName
+				(Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'gitk.exe' | Select-Object -First 1).DirectoryName,
+				(Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'sed.exe' | Select-Object -First 1).DirectoryName,
+				(Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'curl.exe' | Select-Object -First 1).DirectoryName
 			) -join ';')
 		}
 	}

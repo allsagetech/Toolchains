@@ -22,13 +22,13 @@ function global:Install-TlcPackage {
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	New-Item -Path '\pkg' -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile '\pkg\regctl.exe'
-	Invoke-TlcWebRequest -Uri $Asset.URL.Replace('regctl-', 'regbot-') -OutFile '\pkg\regbot.exe'
-	Invoke-TlcWebRequest -Uri $Asset.URL.Replace('regctl-', 'regsync-') -OutFile '\pkg\regsync.exe'
+	New-Item -Path (Get-TlcPkgRoot) -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile (Get-TlcPkgPath 'regctl.exe')
+	Invoke-TlcWebRequest -Uri $Asset.URL.Replace('regctl-', 'regbot-') -OutFile (Get-TlcPkgPath 'regbot.exe')
+	Invoke-TlcWebRequest -Uri $Asset.URL.Replace('regctl-', 'regsync-') -OutFile (Get-TlcPkgPath 'regsync.exe')
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'regctl.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'regctl.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

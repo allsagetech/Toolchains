@@ -26,26 +26,26 @@ function global:Install-TlcPackage {
 	$Params = @{
 		AssetName = $Asset.Name
 		AssetURL = $Asset.URL
-		ToolDir = '\pkg-preinstall\x64'
+		ToolDir = (Get-TlcStagingPath 'pkg-preinstall\x64')
 	}
 	Install-BuildTool @Params
-	New-Item -Path '\pkg\x64' -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-	Move-Item "$(Get-ChildItem -Path '\pkg-preinstall\x64' -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" '\pkg\x64'
+	New-Item -Path (Get-TlcPkgPath 'x64') -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+	Move-Item "$(Get-ChildItem -Path (Get-TlcStagingPath 'pkg-preinstall\x64') -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" (Get-TlcPkgPath 'x64')
 	Write-TlcVars @{
 		env = @{
-			java_home = (Split-Path (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-			path = (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+			java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+			path = (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 		}
 		amd64 = @{
 			env = @{
-				java_home = (Split-Path (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-				path = (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+				java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+				path = (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 			}
 		}
 		x64 = @{
 			env = @{
-				java_home = (Split-Path (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-				path = (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+				java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+				path = (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 			}
 		}
 	}

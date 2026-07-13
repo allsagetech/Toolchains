@@ -92,6 +92,9 @@ function Test-TlcPackageScript {
 	if ($TlcPackageConfig.Tier -and ($TlcPackageConfig.Tier -notin @('tooling', 'model-small', 'model-large'))) {
 		Write-Error "toolchains: unsupported TlcPackageConfig tier: $($TlcPackageConfig.Tier)"
 	}
+	if ($TlcPackageConfig.ContainsKey('VerifiedDownloads') -and -not [bool]$TlcPackageConfig.VerifiedDownloads -and [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) {
+		Write-Error "toolchains: $($TlcPackageConfig.Name) marks downloads unverified without an UnverifiedDownloadReason"
+	}
 }
 
 function Invoke-TlcPackageScan {
@@ -106,26 +109,38 @@ function Invoke-TlcPackageScan {
 			Write-Host "An error occurred: $($_.Exception.Message)"
 		}
 	}
-	Start-MpScan -ScanType CustomScan -ScanPath (Resolve-Path '\pkg').Path
+	Start-MpScan -ScanType CustomScan -ScanPath (Resolve-Path (Get-TlcPkgRoot)).Path
 	Get-MpThreatDetection
 }
 
 function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string]$dockerfileName) {
-	if (Get-Command 'Invoke-CustomDockerBuild' -ErrorAction SilentlyContinue) {
-		Write-Host 'Using custom docker build'
-		if (-not $global:TlcPackageConfig) { $global:TlcPackageConfig = @{} }
-		if ($pkgName) { $global:TlcPackageConfig.Name = $pkgName }
-		if ($pkgVersion) { $global:TlcPackageConfig.Version = $pkgVersion }
-		Invoke-CustomDockerBuild $tag
-		return
-	}
-
 	$pkgRoot = Get-TlcPkgRoot
 	if (-not (Test-Path $pkgRoot)) { throw "Package root does not exist: $pkgRoot" }
 
 	$null = Assert-TlcDefinitionFile
 	$defPath = Join-Path $pkgRoot '.tlc'
 	$defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
+	$labels = @(
+		"io.allsagetech.toolchain.specVersion=1",
+		"io.allsagetech.toolchain.packageName=$pkgName",
+		"io.allsagetech.toolchain.packageVersion=$pkgVersion",
+		"io.allsagetech.toolchain.tlcPath=/.tlc",
+		"io.allsagetech.toolchain.tlcSha256=$defHash",
+		"toolchain.tlcPath=/.tlc",
+		"toolchain.tlcSha256=$defHash"
+	)
+
+	if (Get-Command 'Invoke-CustomDockerBuild' -ErrorAction SilentlyContinue) {
+		Write-Host 'Using custom docker build'
+		if (-not $global:TlcPackageConfig) { $global:TlcPackageConfig = @{} }
+		if ($pkgName) { $global:TlcPackageConfig.Name = $pkgName }
+		if ($pkgVersion) { $global:TlcPackageConfig.Version = $pkgVersion }
+		$global:LASTEXITCODE = 0
+		Invoke-CustomDockerBuild $tag $labels
+		if ($LASTEXITCODE -ne 0) { throw "custom docker build failed with exit code $LASTEXITCODE for $tag" }
+		Assert-TlcBuiltImageContract -Tag $tag -ExpectedLabels $labels
+		return
+	}
 
 	$repoRoot = Split-Path -Parent $PSScriptRoot
 	if (-not $dockerfileName) {
@@ -142,16 +157,7 @@ function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string
 	}
 	$dockerfileDst = Join-Path $pkgRoot 'Dockerfile'
 	Copy-Item -Path $dockerfileSrc -Destination $dockerfileDst -Force
-
-	$labels = @(
-		"io.allsagetech.toolchain.specVersion=1",
-		"io.allsagetech.toolchain.packageName=$pkgName",
-		"io.allsagetech.toolchain.packageVersion=$pkgVersion",
-		"io.allsagetech.toolchain.tlcPath=/.tlc",
-		"io.allsagetech.toolchain.tlcSha256=$defHash",
-		"toolchain.tlcPath=/.tlc",
-		"toolchain.tlcSha256=$defHash"
-	)
+	Set-TlcPackageDockerignore -PkgRoot $pkgRoot
 
 	$args = @('build', '-f', $dockerfileDst, '-t', $tag)
 	foreach ($l in $labels) { $args += @('--label', $l) }
@@ -161,6 +167,43 @@ function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string
 	if ($LASTEXITCODE -ne 0) {
 		throw "docker build failed with exit code $LASTEXITCODE for $tag"
 	}
+	Assert-TlcBuiltImageContract -Tag $tag -ExpectedLabels $labels
+}
+
+function Assert-TlcBuiltImageContract {
+	param(
+		[Parameter(Mandatory=$true)][string]$Tag,
+		[Parameter(Mandatory=$true)][string[]]$ExpectedLabels
+	)
+	$labelJson = (& docker image inspect $Tag --format '{{json .Config.Labels}}' 2>$null | Out-String).Trim()
+	if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($labelJson)) {
+		throw "could not inspect labels on built image $Tag"
+	}
+	$actualLabels = $labelJson | ConvertFrom-Json
+	foreach ($label in $ExpectedLabels) {
+		$separator = $label.IndexOf('=')
+		$key = $label.Substring(0, $separator)
+		$expected = $label.Substring($separator + 1)
+		$property = $actualLabels.PSObject.Properties[$key]
+		if (-not $property -or [string]$property.Value -ne $expected) {
+			throw "built image $Tag is missing required label $key=$expected"
+		}
+	}
+}
+
+function Set-TlcPackageDockerignore {
+	param(
+		[Parameter(Mandatory=$true)][string]$PkgRoot
+	)
+	$ignorePath = Join-Path $PkgRoot '.dockerignore'
+	$lines = @()
+	if (Test-Path -LiteralPath $ignorePath -PathType Leaf) {
+		$lines = @(Get-Content -LiteralPath $ignorePath)
+	}
+	foreach ($line in @('cache', 'cache/**', '_stage', '_stage/**', '**/*.partial-*', '**/*.tmp', '**/*.temp')) {
+		if ($lines -notcontains $line) { $lines += $line }
+	}
+	[IO.File]::WriteAllLines($ignorePath, [string[]]$lines)
 }
 
 
@@ -195,14 +238,12 @@ function Invoke-CosignSignImage([string]$tag) {
 	if (-not (Test-CosignSigningEnabled)) { return }
 	$cosign = Get-Command 'cosign' -ErrorAction SilentlyContinue
 	if (-not $cosign) {
-		Write-Host "cosign not found; skipping image signing"
-		return
+		throw 'cosign was requested but is not available on PATH'
 	}
 	# Use a digest reference to avoid signing a mutable tag.
 	$digRef = (& docker inspect --format '{{index .RepoDigests 0}}' $tag 2>$null).Trim()
 	if (-not $digRef) {
-		Write-Host "cosign sign skipped; could not determine RepoDigests for $tag"
-		return
+		throw "cosign signing was requested but no immutable RepoDigest could be determined for $tag"
 	}
 	$args = @('sign', '--yes')
 	$key = if ($env:TLC_COSIGN_KEY) { $env:TLC_COSIGN_KEY } elseif ($env:COSIGN_KEY) { $env:COSIGN_KEY } else { $null }
@@ -228,6 +269,9 @@ function Invoke-DockerPush([string]$name, [string]$version) {
 	Assert-DockerDaemonAvailable
 
 	if (Test-DockerTagExists $tag) {
+		if (Test-CosignSigningEnabled) {
+			throw "image tag already exists and signing was requested; refusing to skip because the existing signature state was not proven: $tag"
+		}
 		Write-Host "Skip: $tag already exists"
 		return
 	}
@@ -332,11 +376,15 @@ function Save-WorkflowMatrix {
 		$runsOn = Get-TlcPackageRunsOn
 		$publishRunsOn = Get-TlcPackagePublishRunsOn
 		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
+		$verifiedDownloads = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
 		$entry = @{
 			package            = $scriptPath
 			runs_on            = $runsOn
 			publish_runs_on    = $publishRunsOn
 			tier               = $tier
+			verified_downloads  = $verifiedDownloads
+			publish_eligible    = $verifiedDownloads
+			unverified_download_reason = if ($verifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
 			pkg_root           = Get-TlcPkgRootForRunner -RunsOn $runsOn
 			cache_path         = Get-TlcCachePathForRunner -RunsOn $runsOn
 			publish_pkg_root   = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn

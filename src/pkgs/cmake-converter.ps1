@@ -10,7 +10,7 @@ $global:TlcPackageConfig = @{
 }
 
 function global:Install-TlcPackage {
-  $BatFile = "\pkg\cmake-converter.bat"
+  $BatFile = (Get-TlcPkgPath 'cmake-converter.bat')
   New-Item -Type Directory -Force (Split-Path $BatFile) | Out-Null
 
   Set-Content $BatFile @"
@@ -77,5 +77,5 @@ function global:Test-TlcPackageInstall {
   $sln = Get-ChildItem -Recurse $extract -Filter *.sln | Select-Object -First 1
   if (-not $sln) { throw "No .sln found for cmake-converter test." }
 
-  & "\pkg\cmake-converter.bat" -s $sln.FullName
+  & (Get-TlcPkgPath 'cmake-converter.bat') -s $sln.FullName
 }

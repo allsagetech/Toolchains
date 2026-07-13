@@ -25,10 +25,10 @@ function global:Install-TlcPackage {
 	$bundle = "$env:Temp\$($Asset.Name)"
 	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile $bundle
 	Expand-Archive $bundle "$env:temp\bundle"
-	Expand-Archive "$env:temp\bundle\CascadiaPackage_$($Asset.Identifier.Substring(1))_x64.msix" "\pkg"
+	Expand-Archive "$env:temp\bundle\CascadiaPackage_$($Asset.Identifier.Substring(1))_x64.msix" (Get-TlcPkgRoot)
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'wt.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'wt.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

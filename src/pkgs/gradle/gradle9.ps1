@@ -28,15 +28,16 @@ function global:Install-TlcPackage {
 	$Params = @{
 		AssetName = $AssetName
 		AssetURL = "https://services.gradle.org/distributions/$AssetName"
+		ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri "https://services.gradle.org/distributions/$AssetName.sha256"
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'gradle.bat' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'gradle.bat' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
 function global:Test-TlcPackageInstall {
-	Get-Content '\pkg\.tlc'
+	Get-Content (Get-TlcPkgPath '.tlc')
 }

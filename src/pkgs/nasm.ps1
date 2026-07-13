@@ -7,6 +7,8 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'nasm'
+	VerifiedDownloads = $false
+	UnverifiedDownloadReason = 'NASM does not publish a SHA-256 digest or supported signature for its Windows ZIP.'
 }
 
 function global:Install-TlcPackage {
@@ -31,11 +33,11 @@ function global:Install-TlcPackage {
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'nasm.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'nasm.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
 function global:Test-TlcPackageInstall {
-	Get-Content '\pkg\.tlc'
+	Get-Content (Get-TlcPkgPath '.tlc')
 }

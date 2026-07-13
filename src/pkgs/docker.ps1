@@ -9,17 +9,13 @@ $global:TlcPackageConfig = @{
 }
 
 function global:Install-TlcPackage {
+	$DockerVersion = '29.1.5'
+	$upstream = [TlcSemanticVersion]::new($DockerVersion)
+	$TlcPackageConfig.Version = $DockerVersion
+	$TlcPackageConfig.UpToDate = -not $upstream.LaterThan($TlcPackageConfig.Latest)
+	if ($TlcPackageConfig.UpToDate) { return }
 
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for docker.'
-    }
-
-    $DockerVersion = '29.1.5'
-
-    $TlcPackageConfig.Version  = $DockerVersion
-    $TlcPackageConfig.UpToDate = $true
-
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT ("docker-{0}" -f $DockerVersion)
+	$InstallRoot = Get-TlcPkgPath ("docker-{0}" -f $DockerVersion)
 
     if (-not (Test-Path $InstallRoot)) {
         New-Item -ItemType Directory -Path $InstallRoot | Out-Null
@@ -28,23 +24,29 @@ function global:Install-TlcPackage {
     $AssetName = "docker-$DockerVersion.zip"
     $Download  = "https://download.docker.com/win/static/stable/x86_64/$AssetName"
 
-    $ZipPath = Join-Path $InstallRoot $AssetName
+	$ZipPath = Get-TlcStagingPath $AssetName
+	$archiveVerifier = { param($path, $uri) Test-TlcAuthenticodeZip -Path $path -Uri $uri -RequiredExecutable 'docker.exe' }
 
-    Write-Host "Downloading Docker $DockerVersion from $Download"
-    Invoke-WebRequest -Uri $Download -OutFile $ZipPath
+	Write-Host "Downloading Docker $DockerVersion from $Download"
+	try {
+		Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath -SignatureVerifier $archiveVerifier
 
-    if (-not (Test-Path $ZipPath)) {
-        throw "Failed to download Docker archive from $Download"
-    }
+		if (-not (Test-Path $ZipPath)) {
+			throw "Failed to download Docker archive from $Download"
+		}
 
-    Expand-Archive -LiteralPath $ZipPath -DestinationPath $InstallRoot -Force
+		Expand-Archive -LiteralPath $ZipPath -DestinationPath $InstallRoot -Force
+	} finally {
+		Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+	}
 
     $DockerDir = Join-Path $InstallRoot 'docker'
     $DockerExe = Join-Path $DockerDir 'docker.exe'
 
-    if (-not (Test-Path $DockerExe)) {
-        throw "docker.exe not found after extracting $AssetName"
-    }
+	if (-not (Test-Path $DockerExe)) {
+		throw "docker.exe not found after extracting $AssetName"
+	}
+	Assert-TlcDownloadedFile -Path $DockerExe -Uri $Download -RequireValidAuthenticodeSignature
 
     Write-TlcVars @{
         env = @{
@@ -52,20 +54,6 @@ function global:Install-TlcPackage {
         }
     }
 
-    if ($env:TLC_DOCKER_REPO) {
-        Write-Host "Building and pushing Docker package image '$($TlcPackageConfig.Name)' version '$DockerVersion' to $env:TLC_DOCKER_REPO"
-
-        try {
-            Invoke-DockerPush -name $TlcPackageConfig.Name -version $DockerVersion
-        }
-        catch {
-            Write-Warning "Failed to build/push Docker image for package '$($TlcPackageConfig.Name)': $($_.Exception.Message)"
-            throw
-        }
-    }
-    else {
-        Write-Host "TLC_DOCKER_REPO is not set; skipping Docker image push for docker package."
-    }
 }
 
 function global:Test-TlcPackageInstall {

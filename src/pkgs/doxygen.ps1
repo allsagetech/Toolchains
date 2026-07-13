@@ -24,14 +24,18 @@ function global:Install-TlcPackage {
 	$Tag = $Latest.name
 	$Version = $Latest.version.ToString()
 	$AssetName = "doxygen-$Version.windows.x64.bin.zip"
+	$downloadPage = [string](Invoke-TlcWebRequest -Uri 'https://www.doxygen.nl/download.html').Content
+	$hashMatch = [regex]::Match($downloadPage, "(?is)$([regex]::Escape($AssetName))</td>\s*<td[^>]*>\s*<code>([0-9a-f]{64})</code>")
+	if (-not $hashMatch.Success) { throw "Doxygen download metadata is missing SHA-256 for $AssetName" }
 	$Params = @{
 		AssetName = $AssetName
 		AssetURL = "https://www.doxygen.nl/files/$AssetName"
+		ExpectedSha256 = $hashMatch.Groups[1].Value
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'doxygen.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'doxygen.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

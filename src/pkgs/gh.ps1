@@ -42,7 +42,7 @@ function global:Install-TlcPackage {
     }
     Install-BuildTool @Params
 
-    $GhExe = Get-ChildItem -Path '\pkg' -Recurse -Include 'gh.exe' |
+    $GhExe = Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'gh.exe' |
         Select-Object -First 1
 
     if (-not $GhExe) {

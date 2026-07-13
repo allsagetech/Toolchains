@@ -18,16 +18,17 @@ function global:Install-TlcPackage {
 
     $TlcPackageConfig.UpToDate = $false
 
-    $installer = Join-Path $env:TEMP '7zInstall.exe'
-    Invoke-TlcWebRequest -Uri 'https://www.7-zip.org/a/7z2501-x64.exe' -OutFile $installer
+	$installer = Join-Path $env:TEMP '7zInstall.exe'
+	Invoke-TlcWebRequest -Uri 'https://www.7-zip.org/a/7z2501-x64.exe' -OutFile $installer -RequireValidAuthenticodeSignature
 
-    $pkgRoot = (Resolve-Path '\pkg').Path
+	$pkgRoot = Get-TlcPkgRoot
+	New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null
     $proc = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$pkgRoot") -PassThru -Wait
     if ($proc.ExitCode -ne 0) { throw "7-zip installer failed with exit code $($proc.ExitCode)" }
 
     Write-TlcVars @{
         env = @{
-            path = (Get-ChildItem -Path '\pkg' -Recurse -Include '7z.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path $pkgRoot -Recurse -Include '7z.exe' | Select-Object -First 1).DirectoryName
         }
     }
 }

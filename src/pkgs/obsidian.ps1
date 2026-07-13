@@ -10,20 +10,6 @@ $global:TlcPackageConfig = @{
 }
 
 function global:Install-TlcPackage {
-	$sevenZipRoot = Join-Path $env:TEMP 'tlc-7zip'
-	$sevenZipExe  = Join-Path $sevenZipRoot '7z.exe'
-	if (-not (Test-Path $sevenZipExe)) {
-		$installer = Join-Path $env:TEMP '7z-x64.exe'
-		Invoke-TlcWebRequest -Uri 'https://www.7-zip.org/a/7z2501-x64.exe' -OutFile $installer
-		if (Test-Path $sevenZipRoot) { Remove-Item -Recurse -Force $sevenZipRoot }
-		New-Item -ItemType Directory -Path $sevenZipRoot -Force | Out-Null
-		$proc = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$sevenZipRoot") -PassThru -Wait
-		if ($proc.ExitCode -ne 0) { throw "7-zip bootstrap installer failed with exit code $($proc.ExitCode)" }
-		if (-not (Test-Path $sevenZipExe)) {
-			$found = (Get-ChildItem -Path $sevenZipRoot -Recurse -Include '7z.exe' | Select-Object -First 1)
-			if ($found) { $sevenZipExe = $found.FullName } else { throw 'Failed to bootstrap 7z.exe' }
-		}
-	}
 $Params = @{
 		Owner        = 'obsidianmd'
 		Repo         = 'obsidian-releases'
@@ -43,13 +29,16 @@ $Params = @{
 	Write-Host "URL = $($Asset.URL)"
 	$obby = "obsidian.exe"
 	Invoke-TlcWebRequest -Uri "$($Asset.URL)" -OutFile $obby
-	New-Item -ItemType Directory -Path '\app' -Force | Out-Null
-	New-Item -ItemType Directory -Path '\pkg' -Force | Out-Null
-	& $sevenZipExe x -o'\app' $obby | Out-Null
-	& $sevenZipExe x -o'\pkg' '\app\$PLUGINSDIR\app-64.7z' | Out-Null
+	$sevenZipExe = Get-Tlc7ZipExecutable
+	$appRoot = Get-TlcStagingPath 'obsidian-app'
+	if (Test-Path -LiteralPath $appRoot) { Remove-Item -LiteralPath $appRoot -Recurse -Force }
+	New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
+	New-Item -ItemType Directory -Path (Get-TlcPkgRoot) -Force | Out-Null
+	& $sevenZipExe x ("-o{0}" -f $appRoot) $obby | Out-Null
+	& $sevenZipExe x ("-o{0}" -f (Get-TlcPkgRoot)) (Join-Path $appRoot '$PLUGINSDIR\app-64.7z') | Out-Null
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'obsidian.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'obsidian.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

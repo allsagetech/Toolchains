@@ -6,7 +6,9 @@ SPDX-License-Identifier: MPL-2.0
 
 param(
   [string]$Repo = $(if ($env:TOOLCHAIN_REPO) { $env:TOOLCHAIN_REPO } else { 'allsagetech/toolchain' }),
-  [string]$Ref  = $(if ($env:TOOLCHAIN_REF) { $env:TOOLCHAIN_REF } else { 'pipeline' }),
+  # Keep the default immutable. Maintainers may explicitly override it with
+  # -Ref or TOOLCHAIN_REF when testing another release or commit.
+  [string]$Ref  = $(if ($env:TOOLCHAIN_REF) { $env:TOOLCHAIN_REF } else { '328acee1524c513a600589376ea2209add6cb28c' }),
   [string]$Token = $(if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { $null })
 )
 

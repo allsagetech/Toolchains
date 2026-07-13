@@ -36,10 +36,12 @@ function global:Install-TlcPackage {
     $AssetName = "zarf_${Tag}_Windows_amd64.exe"
     $Download  = "https://github.com/zarf-dev/zarf/releases/download/$Tag/$AssetName"
 
-    $ExePath = Join-Path $InstallRoot 'zarf.exe'
+	$ExePath = Join-Path $InstallRoot 'zarf.exe'
+	$ChecksumUrl = "https://github.com/zarf-dev/zarf/releases/download/$Tag/checksums.txt"
+	$ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $ChecksumUrl -AssetName $AssetName -Headers (Get-TlcGitHubHeaders)
 
-    Write-Host "Downloading Zarf $Tag from $Download"
-    Invoke-WebRequest -Uri $Download -OutFile $ExePath
+	Write-Host "Downloading Zarf $Tag from $Download"
+	Invoke-TlcWebRequest -Uri $Download -OutFile $ExePath -ExpectedSha256 $ExpectedSha256
 
     if (-not (Test-Path $ExePath)) {
         throw "Failed to download Zarf binary from $Download"

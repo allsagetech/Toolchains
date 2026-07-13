@@ -49,15 +49,17 @@ function global:Install-TlcPackage {
 		return
 	}
 
-	Install-BuildTool -AssetName $ZipName -AssetURL $Url
+	$checksumUrl = ([Uri]::new([Uri]$Url, "cmake-$VersionString-SHA-256.txt")).AbsoluteUri
+	$expectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $checksumUrl -AssetName $ZipName
+	Install-BuildTool -AssetName $ZipName -AssetURL $Url -ExpectedSha256 $expectedSha256
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'cmake.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'cmake.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
 
 function global:Test-TlcPackageInstall {
-	Get-Content '\pkg\.tlc'
+	Get-Content (Get-TlcPkgPath '.tlc')
 }

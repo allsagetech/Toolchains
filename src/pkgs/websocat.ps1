@@ -22,17 +22,17 @@ function global:Install-TlcPackage {
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	New-Item -Path "\pkg" -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-	$AssetFile = "\pkg\websocat.exe"
+	New-Item -Path (Get-TlcPkgRoot) -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+	$AssetFile = (Get-TlcPkgPath 'websocat.exe')
 	Write-Output "downloading $($Asset.URL) to $AssetFile"
 	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile $AssetFile
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'websocat.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'websocat.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
 function global:Test-TlcPackageInstall {
-	Get-Content '\pkg\.tlc'
+	Get-Content (Get-TlcPkgPath '.tlc')
 }

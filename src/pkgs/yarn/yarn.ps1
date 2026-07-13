@@ -9,12 +9,17 @@ $global:TlcPackageConfig = @{
 }
 
 function global:Install-TlcPackage {
+	$versionOutput = @(& npm view yarn version) | Select-Object -Last 1
+	if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$versionOutput)) {
+		throw "npm view yarn version failed with exit code $LASTEXITCODE"
+	}
+	$version = ([string]$versionOutput).Trim()
+	$upstream = [TlcSemanticVersion]::new($version)
+	$TlcPackageConfig.Version = $version
+	$TlcPackageConfig.UpToDate = -not $upstream.LaterThan($TlcPackageConfig.Latest)
+	if ($TlcPackageConfig.UpToDate) { return }
 
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for yarn.'
-    }
-
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT 'yarn'
+	$InstallRoot = Get-TlcPkgPath 'yarn'
 
     if (-not (Test-Path $InstallRoot)) {
         New-Item -ItemType Directory -Path $InstallRoot | Out-Null
@@ -22,22 +27,13 @@ function global:Install-TlcPackage {
 
     $env:npm_config_prefix = $InstallRoot
 
-    & npm install -g yarn
+	& npm install -g "yarn@$version"
 
     if ($LASTEXITCODE -ne 0) {
         throw "npm install -g yarn failed with exit code $LASTEXITCODE. Make sure the 'node' package is installed and npm is on PATH."
     }
 
-    $YarnCmd = Join-Path $InstallRoot 'yarn.cmd'
-    if (Test-Path $YarnCmd) {
-        $version = & $YarnCmd --version
-        if ($LASTEXITCODE -eq 0 -and $version) {
-            $TlcPackageConfig.Version  = $version.Trim()
-            $TlcPackageConfig.UpToDate = $true
-        }
-    }
-
-    Write-TlcVars @{
+	Write-TlcVars @{
         env = @{
             path = $InstallRoot
         }

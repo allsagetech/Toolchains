@@ -26,8 +26,8 @@ function global:Install-TlcPackage {
 	$installer = Join-Path $env:Temp $Asset.Name
 	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile $installer
 
-	New-Item -ItemType Directory -Path '\pkg' -Force | Out-Null
-	$target = (Resolve-Path '\pkg').Path
+	New-Item -ItemType Directory -Path (Get-TlcPkgRoot) -Force | Out-Null
+	$target = (Resolve-Path (Get-TlcPkgRoot)).Path
 
 	$arguments = @('/S', "/D=$target")
 	$proc = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru -NoNewWindow

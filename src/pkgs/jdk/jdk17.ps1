@@ -26,21 +26,21 @@ function global:Install-TlcPackage {
 	$Params = @{
 		AssetName = $Asset.Name
 		AssetURL = $Asset.URL
-		ToolDir = '\pkg-preinstall\x64'
+		ToolDir = (Get-TlcStagingPath 'pkg-preinstall\x64')
 	}
 	Install-BuildTool @Params
-	New-Item -Path '\pkg\x64' -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-	Move-Item "$(Get-ChildItem -Path '\pkg-preinstall\x64' -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" '\pkg\x64'
+	New-Item -Path (Get-TlcPkgPath 'x64') -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+	Move-Item "$(Get-ChildItem -Path (Get-TlcStagingPath 'pkg-preinstall\x64') -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" (Get-TlcPkgPath 'x64')
 	$haveX86 = $false
 	try {
 		$Params_x86 = @{
 			AssetName = $Asset.Name.Replace('_x64_', '_x86-32_')
 			AssetURL  = $Asset.URL.Replace('_x64_', '_x86-32_')
-			ToolDir   = '\pkg-preinstall\x86'
+			ToolDir   = (Get-TlcStagingPath 'pkg-preinstall\x86')
 		}
 		Install-BuildTool @Params_x86
-		New-Item -Path '\pkg\x86' -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-		Move-Item "$(Get-ChildItem -Path '\pkg-preinstall\x86' -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" '\pkg\x86'
+		New-Item -Path (Get-TlcPkgPath 'x86') -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+		Move-Item "$(Get-ChildItem -Path (Get-TlcStagingPath 'pkg-preinstall\x86') -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" (Get-TlcPkgPath 'x86')
 		$haveX86 = $true
 	} catch {
 		if ($_ -match 'Not Found') {
@@ -52,27 +52,27 @@ function global:Install-TlcPackage {
 
 	$vars = @{
 		env = @{
-			java_home = (Split-Path (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-			path = (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+			java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+			path = (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 		}
 		amd64 = @{
 			env = @{
-				java_home = (Split-Path (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-				path = (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+				java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+				path = (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 			}
 		}
 		x64 = @{
 			env = @{
-				java_home = (Split-Path (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-				path = (Get-ChildItem -Path '\pkg\x64' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+				java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+				path = (Get-ChildItem -Path (Get-TlcPkgPath 'x64') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 			}
 		}
 	}
 	if ($haveX86) {
 		$vars['x86'] = @{
 			env = @{
-				java_home = (Split-Path (Get-ChildItem -Path '\pkg\x86' -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
-				path      = (Get-ChildItem -Path '\pkg\x86' -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
+				java_home = (Split-Path (Get-ChildItem -Path (Get-TlcPkgPath 'x86') -Recurse -Include 'bin' | Select-Object -First 1).FullName -Parent)
+				path      = (Get-ChildItem -Path (Get-TlcPkgPath 'x86') -Recurse -Include 'java.exe' | Select-Object -First 1).DirectoryName
 			}
 		}
 	}
@@ -84,7 +84,7 @@ function global:Test-TlcPackageInstall {
 		java -version
 		javac -version
 	}
-	if (Test-Path '\pkg\x86') {
+	if (Test-Path (Get-TlcPkgPath 'x86')) {
 		Toolchain exec "$(Get-TlcPkgUri)<x86" {
 			java -version
 			javac -version

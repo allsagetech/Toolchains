@@ -29,7 +29,7 @@ function global:Install-TlcPackage {
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'pwsh.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'pwsh.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

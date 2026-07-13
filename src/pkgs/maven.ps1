@@ -30,11 +30,12 @@ function global:Install-TlcPackage {
 	}
 	$TlcPackageConfig.Version = $PkgInfo.Version.ToString()
 	Write-Output "Installing maven v$($TlcPackageConfig.Version)..."
-	Install-BuildTool 'maven.zip' $PkgInfo.URI "$env:Temp\maven-unzip"
-	Move-Item (Get-Item "$env:Temp\maven-unzip\*") '\pkg'
+	$expectedSha512 = Get-TlcRemoteHash -ChecksumUri "$($PkgInfo.URI).sha512" -Algorithm SHA512
+	Install-BuildTool -AssetName 'maven.zip' -AssetURL $PkgInfo.URI -ToolDir "$env:Temp\maven-unzip" -ExpectedHash $expectedSha512 -ExpectedHashAlgorithm SHA512
+	Move-Item (Get-Item "$env:Temp\maven-unzip\*") (Get-TlcPkgRoot)
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'mvn.cmd' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'mvn.cmd' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
