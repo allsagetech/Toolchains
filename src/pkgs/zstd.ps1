@@ -7,6 +7,8 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'zstd'
+	VerifiedDownloads = $false
+	UnverifiedDownloadReason = 'Zstandard does not publish a SHA-256 digest or supported signature for its Windows ZIP.'
 }
 
 function global:Install-TlcPackage {

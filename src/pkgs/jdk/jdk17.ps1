@@ -43,7 +43,7 @@ function global:Install-TlcPackage {
 		Move-Item "$(Get-ChildItem -Path (Get-TlcStagingPath 'pkg-preinstall\x86') -Recurse -Include 'bin' | Select-Object -First 1 | ForEach-Object { Split-Path $_ })\*" (Get-TlcPkgPath 'x86')
 		$haveX86 = $true
 	} catch {
-		if ($_ -match 'Not Found') {
+		if ($_ -match 'Not Found|no upstream hash') {
 			Write-Host 'x86-32 JDK asset not published for this release; skipping x86 variant.'
 		} else {
 			throw

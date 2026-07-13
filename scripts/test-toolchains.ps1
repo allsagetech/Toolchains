@@ -99,7 +99,7 @@ function Test-ProductionReadinessPolicies {
 	. .\src\main.ps1
 
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
-	Assert-True ($installerText -match "328acee1524c513a600589376ea2209add6cb28c") 'Toolchain installer default is not pinned to the reviewed immutable commit.'
+	Assert-True ($installerText -match "630b860e9defe50e01003793c925317b7c103a4c") 'Toolchain installer default is not pinned to the reviewed immutable commit.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
 
 	$hardCodedRoots = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Select-String -Pattern '(?i)(?<![A-Za-z0-9_])\\{1,2}pkg(?:[\\/]|[''\"])')
@@ -116,7 +116,6 @@ function Test-ProductionReadinessPolicies {
 	$dockerPackageText = Get-Content -LiteralPath .\src\pkgs\docker.ps1 -Raw
 	Assert-True ($dockerPackageText -notmatch '\bInvoke-DockerPush\b') 'Docker package installer still owns image publication.'
 	Assert-True ($dockerPackageText -notmatch 'UpToDate\s*=\s*\$true') 'Docker package installer still unconditionally suppresses lifecycle testing/publication.'
-	Assert-True ($dockerPackageText -match 'SignatureVerifier') 'Docker archive is not provenance-checked before the common downloader commits or caches it.'
 	$pushText = (Get-Command Invoke-DockerPush).Definition
 	Assert-True ($pushText -match 'existing signature state was not proven') 'Requested signing can silently skip an existing image tag.'
 
@@ -127,9 +126,27 @@ function Test-ProductionReadinessPolicies {
 		Assert-True ($verifiedText -match 'ExpectedSha256') "$verifiedScript does not pass its publisher SHA-256 to the common downloader."
 	}
 	Clear-TlcPackageScript
-	. .\src\pkgs\nasm.ps1
-	Assert-True (-not [bool]$TlcPackageConfig.VerifiedDownloads) 'NASM is not quarantined despite missing publisher provenance metadata.'
-	Assert-True (-not [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) 'NASM quarantine does not explain the provenance gap.'
+	foreach ($quarantinedScript in @('.\src\pkgs\docker.ps1', '.\src\pkgs\nasm.ps1', '.\src\pkgs\zstd.ps1')) {
+		Clear-TlcPackageScript
+		. $quarantinedScript
+		Assert-True (-not [bool]$TlcPackageConfig.VerifiedDownloads) "$quarantinedScript is not quarantined despite missing publisher provenance metadata."
+		Assert-True (-not [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) "$quarantinedScript quarantine does not explain the provenance gap."
+	}
+	$sevenZipPackageText = Get-Content -LiteralPath .\src\pkgs\7-zip.ps1 -Raw
+	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'
+	$utilText = Get-Content -LiteralPath .\src\util.ps1 -Raw
+	Assert-True ($utilText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
+	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
+	Assert-True ($workflowText -match '\$TlcPackageConfig\.Tags\s*=\s*@\(\)') 'Forced PR smoke builds do not clear published package tags.'
+	Assert-True ($workflowText -match 'Where-Object \{ \[bool\]\$_\.publish_eligible \}') 'Workflow matrices do not exclude quarantined packages.'
+	Assert-True ($workflowText -match 'RUNNER_OS -eq ''Linux''[\s\S]+Get-ChildItem -LiteralPath \$full -Force \| Remove-Item') 'Linux package cleanup still removes the protected mount root.'
+	foreach ($optionalX86Script in @(
+		'.\src\pkgs\jdk\jdk8.ps1', '.\src\pkgs\jdk\jdk11.ps1', '.\src\pkgs\jdk\jdk17.ps1',
+		'.\src\pkgs\jre\jre8.ps1', '.\src\pkgs\jre\jre11.ps1', '.\src\pkgs\jre\jre17.ps1'
+	)) {
+		$optionalX86Text = Get-Content -LiteralPath $optionalX86Script -Raw
+		Assert-True ($optionalX86Text -match 'Not Found\|no upstream hash') "$optionalX86Script does not skip an unavailable optional x86 artifact under strict verification."
+	}
 	Clear-TlcPackageScript
 
 	$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("toolchains-ignore-test-" + [Guid]::NewGuid().ToString('n'))

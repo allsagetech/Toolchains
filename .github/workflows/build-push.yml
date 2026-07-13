@@ -23,7 +23,7 @@ env:
   # Immutable Toolchain consumer used for package execution and local image contracts.
   # Update only after the corresponding Toolchain commit has passed its release gates.
   TOOLCHAIN_REPO: allsagetech/toolchain
-  TOOLCHAIN_REF: 328acee1524c513a600589376ea2209add6cb28c
+  TOOLCHAIN_REF: 630b860e9defe50e01003793c925317b7c103a4c
   TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
 
 jobs:
@@ -91,6 +91,10 @@ jobs:
                 Write-Host "Skipping large-model PR build on a self-hosted runner: $path"
                 continue
               }
+              if (-not [bool]$entry.publish_eligible) {
+                Write-Output "::warning file=$path,title=Package quarantined::$($entry.unverified_download_reason)"
+                continue
+              }
               $entries += $entry
             }
           } else {
@@ -98,8 +102,13 @@ jobs:
             $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
             $entries = @($obj.include)
 
+            foreach ($entry in @($entries | Where-Object { -not [bool]$_.publish_eligible })) {
+              Write-Output "::warning file=$($entry.package),title=Package quarantined::$($entry.unverified_download_reason)"
+            }
+            $entries = @($entries | Where-Object { [bool]$_.publish_eligible })
+
             if ($entries.Count -eq 0) {
-              Write-Host 'No outdated packages were discovered.'
+              Write-Host 'No publication-eligible outdated packages were discovered.'
             }
 
             $isMainPush = $env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main'
@@ -257,7 +266,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: allsagetech/toolchain
-          ref: 328acee1524c513a600589376ea2209add6cb28c
+          ref: 630b860e9defe50e01003793c925317b7c103a4c
           path: .ci/toolchain-contract
           persist-credentials: false
 
@@ -283,7 +292,13 @@ jobs:
           if ($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/')) {
             throw "Unsafe package root: $full"
           }
-          if (Test-Path -LiteralPath $full) { Remove-Item -LiteralPath $full -Recurse -Force }
+          if (Test-Path -LiteralPath $full) {
+            if ($env:RUNNER_OS -eq 'Linux') {
+              Get-ChildItem -LiteralPath $full -Force | Remove-Item -Recurse -Force
+            } else {
+              Remove-Item -LiteralPath $full -Recurse -Force
+            }
+          }
           New-Item -ItemType Directory -Path $full -Force | Out-Null
           if ($env:RUNNER_OS -eq 'Windows') {
             if (Test-Path -LiteralPath 'C:\pkg') { Remove-Item -LiteralPath 'C:\pkg' -Recurse -Force }
@@ -323,6 +338,7 @@ jobs:
 
           Invoke-TlcInit
           $TlcPackageConfig.Latest = [TlcSemanticVersion]::new()
+          $TlcPackageConfig.Tags = @()
           $TlcPackageConfig.UpToDate = $false
           Install-TlcPackage
           if ($TlcPackageConfig.UpToDate) {
@@ -404,7 +420,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $full = [IO.Path]::GetFullPath($env:TLC_PKG_ROOT)
           if ($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/')) { throw "Unsafe package root: $full" }
-          if (Test-Path -LiteralPath $full) { Remove-Item -LiteralPath $full -Recurse -Force }
+          if (Test-Path -LiteralPath $full) {
+            if ($env:RUNNER_OS -eq 'Linux') {
+              Get-ChildItem -LiteralPath $full -Force | Remove-Item -Recurse -Force
+            } else {
+              Remove-Item -LiteralPath $full -Recurse -Force
+            }
+          }
           New-Item -ItemType Directory -Path (Join-Path $full 'cache') -Force | Out-Null
           if ($env:RUNNER_OS -eq 'Windows') {
             if (Test-Path -LiteralPath 'C:\pkg') { Remove-Item -LiteralPath 'C:\pkg' -Recurse -Force }
@@ -464,7 +486,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: allsagetech/toolchain
-          ref: 328acee1524c513a600589376ea2209add6cb28c
+          ref: 630b860e9defe50e01003793c925317b7c103a4c
           path: .ci/toolchain-contract
           persist-credentials: false
 

@@ -16,10 +16,10 @@ function global:Install-TlcPackage {
         return
     }
 
-    $TlcPackageConfig.UpToDate = $false
+	$TlcPackageConfig.UpToDate = $false
 
 	$installer = Join-Path $env:TEMP '7zInstall.exe'
-	Invoke-TlcWebRequest -Uri 'https://www.7-zip.org/a/7z2501-x64.exe' -OutFile $installer -RequireValidAuthenticodeSignature
+	Invoke-TlcWebRequest -Uri 'https://github.com/ip7z/7zip/releases/download/25.01/7z2501-x64.exe' -OutFile $installer
 
 	$pkgRoot = Get-TlcPkgRoot
 	New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null

@@ -534,6 +534,18 @@ function Get-TlcGitHubReleaseAssetSha256 {
 	if ($digest -match '^sha256:([0-9a-fA-F]{64})$') {
 		return $Matches[1].ToLowerInvariant()
 	}
+
+	$checksumNames = @("$assetName.sha256.txt", "$assetName.sha256")
+	$checksumAsset = @($release.assets) |
+		Where-Object { [string]$_.name -in $checksumNames } |
+		Select-Object -First 1
+	$checksumUri = if ($checksumAsset) { [string]$checksumAsset.browser_download_url } else { $null }
+	if ($checksumUri) {
+		# A companion asset is unambiguous because its name includes the complete
+		# payload filename. Parse the sole SHA-256 value so both common publisher
+		# formats (hash-only and "hash filename") are supported.
+		return Get-TlcRemoteSha256 -ChecksumUri $checksumUri -Headers (Get-TlcGitHubHeaders)
+	}
 	return $null
 }
 
@@ -1130,7 +1142,7 @@ function Get-Tlc7ZipExecutable {
 	}
 	$sevenZipRoot = Join-Path ([IO.Path]::GetTempPath()) ("tlc-7zip-$PID")
 	$installer = Join-Path ([IO.Path]::GetTempPath()) '7z2501-x64.exe'
-	Invoke-TlcWebRequest -Uri 'https://www.7-zip.org/a/7z2501-x64.exe' -OutFile $installer -RequireValidAuthenticodeSignature
+	Invoke-TlcWebRequest -Uri 'https://github.com/ip7z/7zip/releases/download/25.01/7z2501-x64.exe' -OutFile $installer
 	if (Test-Path -LiteralPath $sevenZipRoot) { Remove-Item -LiteralPath $sevenZipRoot -Recurse -Force }
 	New-Item -ItemType Directory -Path $sevenZipRoot -Force | Out-Null
 	$proc = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$sevenZipRoot") -PassThru -Wait

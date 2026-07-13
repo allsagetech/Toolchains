@@ -5,7 +5,9 @@ SPDX-License-Identifier: MPL-2.0
 #>
 
 $global:TlcPackageConfig = @{
-    Name = 'docker'
+	Name = 'docker'
+	VerifiedDownloads = $false
+	UnverifiedDownloadReason = 'Docker does not publish a SHA-256 digest or supported signature for its Windows static ZIP.'
 }
 
 function global:Install-TlcPackage {
@@ -22,14 +24,13 @@ function global:Install-TlcPackage {
     }
 
     $AssetName = "docker-$DockerVersion.zip"
-    $Download  = "https://download.docker.com/win/static/stable/x86_64/$AssetName"
+	$Download  = "https://download.docker.com/win/static/stable/x86_64/$AssetName"
 
 	$ZipPath = Get-TlcStagingPath $AssetName
-	$archiveVerifier = { param($path, $uri) Test-TlcAuthenticodeZip -Path $path -Uri $uri -RequiredExecutable 'docker.exe' }
 
 	Write-Host "Downloading Docker $DockerVersion from $Download"
 	try {
-		Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath -SignatureVerifier $archiveVerifier
+		Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath
 
 		if (-not (Test-Path $ZipPath)) {
 			throw "Failed to download Docker archive from $Download"
@@ -46,7 +47,6 @@ function global:Install-TlcPackage {
 	if (-not (Test-Path $DockerExe)) {
 		throw "docker.exe not found after extracting $AssetName"
 	}
-	Assert-TlcDownloadedFile -Path $DockerExe -Uri $Download -RequireValidAuthenticodeSignature
 
     Write-TlcVars @{
         env = @{
