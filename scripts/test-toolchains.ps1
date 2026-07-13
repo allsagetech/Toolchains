@@ -99,7 +99,7 @@ function Test-ProductionReadinessPolicies {
 	. .\src\main.ps1
 
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
-	Assert-True ($installerText -match "10342606bb137f6a9823a8bc8ca4f7f75a1a40d2") 'Toolchain installer default is not pinned to the reviewed immutable commit.'
+	Assert-True ($installerText -match "f6088e16872964cc8b5f4618a8e1bc0596822e32") 'Toolchain installer default is not pinned to the reviewed immutable commit.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
 
 	$hardCodedRoots = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Select-String -Pattern '(?i)(?<![A-Za-z0-9_])\\{1,2}pkg(?:[\\/]|[''\"])')
