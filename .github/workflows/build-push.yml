@@ -23,7 +23,7 @@ env:
   # Immutable Toolchain consumer used for package execution and local image contracts.
   # Update only after the corresponding Toolchain commit has passed its release gates.
   TOOLCHAIN_REPO: allsagetech/toolchain
-  TOOLCHAIN_REF: 630b860e9defe50e01003793c925317b7c103a4c
+  TOOLCHAIN_REF: 10342606bb137f6a9823a8bc8ca4f7f75a1a40d2
   TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
 
 jobs:
@@ -248,6 +248,7 @@ jobs:
     env:
       TLC_PKG_ROOT: ${{ matrix.pkg_root }}
       TLC_REQUIRE_VERIFIED_DOWNLOADS: '1'
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Enforce verified-download publication policy
         if: matrix.verified_downloads != true || matrix.publish_eligible != true
@@ -266,7 +267,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: allsagetech/toolchain
-          ref: 630b860e9defe50e01003793c925317b7c103a4c
+          ref: 10342606bb137f6a9823a8bc8ca4f7f75a1a40d2
           path: .ci/toolchain-contract
           persist-credentials: false
 
@@ -386,6 +387,7 @@ jobs:
     env:
       TLC_PKG_ROOT: ${{ matrix.pkg_root }}
       TLC_REQUIRE_VERIFIED_DOWNLOADS: '1'
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Enforce verified-download build policy
         if: matrix.verified_downloads != true || matrix.publish_eligible != true
@@ -486,7 +488,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: allsagetech/toolchain
-          ref: 630b860e9defe50e01003793c925317b7c103a4c
+          ref: 10342606bb137f6a9823a8bc8ca4f7f75a1a40d2
           path: .ci/toolchain-contract
           persist-credentials: false
 
