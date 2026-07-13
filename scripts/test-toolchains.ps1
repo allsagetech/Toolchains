@@ -136,6 +136,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'
 	$doxygenPackageText = Get-Content -LiteralPath .\src\pkgs\doxygen.ps1 -Raw
 	Assert-True ($doxygenPackageText -match 'github\.com/doxygen/doxygen/releases/download/\$Tag/\$AssetName') 'Doxygen does not use its official GitHub release asset with published SHA-256 metadata.'
+	$vsBuildToolsText = Get-Content -LiteralPath .\src\pkgs\vs-buildtools.ps1 -Raw
+	Assert-True ($vsBuildToolsText.Contains('${env:ProgramFiles(x86)}\Microsoft SDKs')) 'Visual Studio Build Tools omits an SDK directory referenced by its generated PATH contract.'
 	$utilText = Get-Content -LiteralPath .\src\util.ps1 -Raw
 	Assert-True ($utilText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw

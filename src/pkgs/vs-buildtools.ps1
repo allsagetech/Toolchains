@@ -98,7 +98,12 @@ function global:Install-TlcPackage {
 
 	$pkgRoot = Get-TlcPkgRoot
 	New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null
-	Move-Item "${env:ProgramFiles(x86)}\Microsoft Visual Studio*", "${env:ProgramFiles(x86)}\Windows Kits" -Destination $pkgRoot
+	$packageRoots = @(
+		"${env:ProgramFiles(x86)}\Microsoft Visual Studio*"
+		"${env:ProgramFiles(x86)}\Microsoft SDKs"
+		"${env:ProgramFiles(x86)}\Windows Kits"
+	)
+	Move-Item -Path $packageRoots -Destination $pkgRoot
 
     [System.IO.File]::WriteAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\winsdk.bat'),
         [System.IO.File]::ReadAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\winsdk.bat')).
