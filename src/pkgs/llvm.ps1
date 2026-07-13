@@ -23,8 +23,8 @@ function global:Install-TlcPackage {
 		return
 	}
 
-	if (-not (Test-Path '\pkg')) { New-Item -ItemType Directory -Path '\pkg' -Force | Out-Null }
-	$pkgRoot = (Resolve-Path '\pkg').Path
+	if (-not (Test-Path (Get-TlcPkgRoot))) { New-Item -ItemType Directory -Path (Get-TlcPkgRoot) -Force | Out-Null }
+	$pkgRoot = (Resolve-Path (Get-TlcPkgRoot)).Path
 
 	$llvmExe = Join-Path $env:TEMP $Asset.Name
 	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile $llvmExe

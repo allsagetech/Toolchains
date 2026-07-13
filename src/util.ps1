@@ -118,33 +118,85 @@ function Invoke-TlcWebRequest {
 		[hashtable]$Headers,
 		[int]$TimeoutSec = 300,
 		[int]$MaxRetries = 8,
-		[int]$RetryDelaySeconds = 2
+		[int]$RetryDelaySeconds = 2,
+		[string]$ExpectedSha256,
+		[string]$ExpectedHash,
+		[ValidateSet('SHA256', 'SHA384', 'SHA512')][string]$ExpectedHashAlgorithm = 'SHA256',
+		[switch]$RequireValidAuthenticodeSignature,
+		[scriptblock]$SignatureVerifier
 	)
 	$ErrorActionPreference = 'Stop'
 	$hasUseBasicParsing = (Get-Command Invoke-WebRequest).Parameters.ContainsKey('UseBasicParsing')
+	if ($OutFile -and -not $ExpectedSha256 -and -not $ExpectedHash -and $global:TlcKnownAssetSha256 -and $global:TlcKnownAssetSha256.ContainsKey($Uri)) {
+		$ExpectedSha256 = [string]$global:TlcKnownAssetSha256[$Uri]
+	}
+	if ($OutFile -and -not $ExpectedSha256 -and -not $ExpectedHash -and ([Uri]$Uri).Host -eq 'github.com') {
+		$ExpectedSha256 = Get-TlcGitHubReleaseAssetSha256 -Uri $Uri
+	}
+	$hasIndependentVerification = [bool]($ExpectedSha256 -or $ExpectedHash -or $RequireValidAuthenticodeSignature -or $SignatureVerifier)
+	$requireVerified = $env:TLC_REQUIRE_VERIFIED_DOWNLOADS -in @('1', 'true', 'TRUE', 'yes', 'YES')
+	if ($OutFile -and $requireVerified -and -not $hasIndependentVerification) {
+		throw "verified downloads are required, but no upstream hash or signature verifier was supplied for $Uri"
+	}
 
 	$cacheFile = $null
 	if ($OutFile) {
-		try {
-			$ext = [IO.Path]::GetExtension($OutFile)
-			if (-not $ext) { $ext = [IO.Path]::GetExtension(([Uri]$Uri).AbsolutePath) }
-			$cacheFile = Get-TlcCachePathForUri -Uri $Uri -Extension ($ext.TrimStart('.'))
-			if ($cacheFile -and (Test-Path -LiteralPath $cacheFile -PathType Leaf)) {
-				Copy-Item -LiteralPath $cacheFile -Destination $OutFile -Force
+		$destinationParent = Split-Path -Parent $OutFile
+		if ($destinationParent -and (-not (Test-Path -LiteralPath $destinationParent -PathType Container))) {
+			New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+		}
+		$ext = [IO.Path]::GetExtension($OutFile)
+		if (-not $ext) { $ext = [IO.Path]::GetExtension(([Uri]$Uri).AbsolutePath) }
+		$cacheFile = Get-TlcCachePathForUri -Uri $Uri -Extension ($ext.TrimStart('.'))
+		if ($cacheFile -and (Test-Path -LiteralPath $cacheFile -PathType Leaf)) {
+			$cacheHashPath = "$cacheFile.sha256"
+			try {
+				if (-not $hasIndependentVerification) { throw 'cache entry has no independent provenance check' }
+				Assert-TlcDownloadedFile -Path $cacheFile -Uri $Uri -ExpectedSha256 $ExpectedSha256 -ExpectedHash $ExpectedHash -ExpectedHashAlgorithm $ExpectedHashAlgorithm -RequireValidAuthenticodeSignature:$RequireValidAuthenticodeSignature -SignatureVerifier $SignatureVerifier
+				$outputTemp = "$OutFile.partial-$([Guid]::NewGuid().ToString('n'))"
+				try {
+					Copy-Item -LiteralPath $cacheFile -Destination $outputTemp -Force
+					Move-Item -LiteralPath $outputTemp -Destination $OutFile -Force
+				} finally {
+					Remove-Item -LiteralPath $outputTemp -Force -ErrorAction SilentlyContinue
+				}
 				return [pscustomobject]@{ StatusCode = 200; FromCache = $true; Path = $OutFile }
+			} catch {
+				Write-Warning "Discarding invalid cached download for $Uri`: $($_.Exception.Message)"
+				Remove-Item -LiteralPath $cacheFile -Force -ErrorAction SilentlyContinue
+				Remove-Item -LiteralPath $cacheHashPath -Force -ErrorAction SilentlyContinue
 			}
-		} catch { }
+		}
 	}
 	for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+		$downloadTemp = if ($OutFile) { "$OutFile.partial-$([Guid]::NewGuid().ToString('n'))" } else { $null }
 		try {
 			$Params = @{ Uri = $Uri; ErrorAction = 'Stop'; TimeoutSec = $TimeoutSec }
-			if ($OutFile) { $Params.OutFile = $OutFile }
+			if ($downloadTemp) { $Params.OutFile = $downloadTemp }
 			if ($Headers) { $Params.Headers = $Headers }
 			if ($hasUseBasicParsing) { $Params.UseBasicParsing = $true }
 			$resp = (Invoke-WebRequest @Params)
-			if ($OutFile -and $cacheFile) { try { Copy-Item -LiteralPath $OutFile -Destination $cacheFile -Force } catch { } }
+			if ($downloadTemp) {
+				Assert-TlcDownloadedFile -Path $downloadTemp -Uri $Uri -ExpectedSha256 $ExpectedSha256 -ExpectedHash $ExpectedHash -ExpectedHashAlgorithm $ExpectedHashAlgorithm -RequireValidAuthenticodeSignature:$RequireValidAuthenticodeSignature -SignatureVerifier $SignatureVerifier
+				Move-Item -LiteralPath $downloadTemp -Destination $OutFile -Force
+			}
+			if ($OutFile -and $cacheFile -and $hasIndependentVerification) {
+				$cacheTemp = "$cacheFile.partial-$([Guid]::NewGuid().ToString('n'))"
+				$hashTemp = "$cacheFile.sha256.partial-$([Guid]::NewGuid().ToString('n'))"
+				try {
+					Copy-Item -LiteralPath $OutFile -Destination $cacheTemp -Force
+					$downloadSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $OutFile).Hash.ToLowerInvariant()
+					[IO.File]::WriteAllText($hashTemp, $downloadSha256)
+					Move-Item -LiteralPath $cacheTemp -Destination $cacheFile -Force
+					Move-Item -LiteralPath $hashTemp -Destination "$cacheFile.sha256" -Force
+				} finally {
+					Remove-Item -LiteralPath $cacheTemp -Force -ErrorAction SilentlyContinue
+					Remove-Item -LiteralPath $hashTemp -Force -ErrorAction SilentlyContinue
+				}
+			}
 			return $resp
 		} catch {
+			if ($downloadTemp) { Remove-Item -LiteralPath $downloadTemp -Force -ErrorAction SilentlyContinue }
 			$statusCode = $null
 			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
 			if ($statusCode -and $statusCode -ge 400 -and $statusCode -lt 500 -and ($statusCode -notin 408, 429)) { throw }
@@ -351,6 +403,152 @@ print(path, flush=True)
 	}
 }
 
+function Assert-TlcDownloadedFile {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$Path,
+		[Parameter(Mandatory=$true)][string]$Uri,
+		[string]$ExpectedSha256,
+		[string]$ExpectedHash,
+		[ValidateSet('SHA256', 'SHA384', 'SHA512')][string]$ExpectedHashAlgorithm = 'SHA256',
+		[switch]$RequireValidAuthenticodeSignature,
+		[scriptblock]$SignatureVerifier
+	)
+
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+		throw "download did not create a file for $Uri"
+	}
+	if ((Get-Item -LiteralPath $Path).Length -le 0) {
+		throw "downloaded file is empty for $Uri"
+	}
+
+	if ($ExpectedSha256) {
+		$normalized = $ExpectedSha256.Trim().ToLowerInvariant()
+		if ($normalized -notmatch '^[0-9a-f]{64}$') { throw "invalid expected SHA-256 for $Uri" }
+		$actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+		if ($actual -ne $normalized) { throw "SHA-256 mismatch for $Uri (expected $normalized, got $actual)" }
+	}
+	if ($ExpectedHash) {
+		$normalized = ($ExpectedHash -replace '\s', '').ToLowerInvariant()
+		if ($normalized -notmatch '^[0-9a-f]+$') { throw "invalid expected $ExpectedHashAlgorithm hash for $Uri" }
+		$actual = (Get-FileHash -Algorithm $ExpectedHashAlgorithm -LiteralPath $Path).Hash.ToLowerInvariant()
+		if ($actual -ne $normalized) { throw "$ExpectedHashAlgorithm mismatch for $Uri (expected $normalized, got $actual)" }
+	}
+
+	if ($RequireValidAuthenticodeSignature) {
+		$signatureCommand = Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue
+		if (-not $signatureCommand) { throw "Authenticode verification is unavailable for $Uri" }
+		$signature = Get-AuthenticodeSignature -LiteralPath $Path
+		if ($signature.Status -ne 'Valid') { throw "Authenticode signature is not valid for $Uri (status: $($signature.Status))" }
+	}
+	if ($SignatureVerifier) {
+		$verified = & $SignatureVerifier $Path $Uri
+		if (-not $verified) { throw "signature verification failed for $Uri" }
+	}
+}
+
+function Test-TlcAuthenticodeZip {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$Path,
+		[Parameter(Mandatory=$true)][string]$Uri,
+		[string]$RequiredExecutable
+	)
+	$signatureCommand = Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue
+	if (-not $signatureCommand) { throw "Authenticode verification is unavailable for $Uri" }
+	$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("toolchains-signature-$([Guid]::NewGuid().ToString('n'))")
+	try {
+		Expand-Archive -LiteralPath $Path -DestinationPath $tempRoot -Force
+		$executables = @(Get-ChildItem -LiteralPath $tempRoot -Filter '*.exe' -Recurse -File)
+		if ($executables.Count -eq 0) { throw "signed archive contains no executables: $Uri" }
+		if ($RequiredExecutable -and -not ($executables | Where-Object { $_.Name -eq $RequiredExecutable } | Select-Object -First 1)) {
+			throw "signed archive is missing required executable $RequiredExecutable`: $Uri"
+		}
+		foreach ($executable in $executables) {
+			$signature = Get-AuthenticodeSignature -LiteralPath $executable.FullName
+			if ($signature.Status -ne 'Valid') { throw "Authenticode signature is not valid for $($executable.Name) in $Uri (status: $($signature.Status))" }
+		}
+		return $true
+	} finally {
+		Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+	}
+}
+
+function Get-TlcRemoteSha256 {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$ChecksumUri,
+		[string]$AssetName,
+		[hashtable]$Headers
+	)
+	return Get-TlcRemoteHash -ChecksumUri $ChecksumUri -AssetName $AssetName -Headers $Headers -Algorithm SHA256
+}
+
+function Get-TlcRemoteHash {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$ChecksumUri,
+		[string]$AssetName,
+		[hashtable]$Headers,
+		[ValidateSet('SHA256', 'SHA384', 'SHA512')][string]$Algorithm = 'SHA256'
+	)
+	$response = Invoke-TlcWebRequest -Uri $ChecksumUri -Headers $Headers
+	$content = if ($response.Content -is [byte[]]) {
+		[Text.Encoding]::UTF8.GetString([byte[]]$response.Content)
+	} else {
+		[string]$response.Content
+	}
+	if ([string]::IsNullOrWhiteSpace($content)) { throw "checksum document is empty: $ChecksumUri" }
+	$hexLength = switch ($Algorithm) { 'SHA256' { 64 } 'SHA384' { 96 } 'SHA512' { 128 } }
+
+	if ($AssetName) {
+		$escapedName = [regex]::Escape($AssetName)
+		$match = [regex]::Match($content, "(?im)^([0-9a-f]{$hexLength})\s+\*?(?:.*/)?$escapedName\s*$")
+		if (-not $match.Success) { throw "$Algorithm for $AssetName was not found in $ChecksumUri" }
+		return $match.Groups[1].Value.ToLowerInvariant()
+	}
+
+	$match = [regex]::Match($content, "(?i)\b([0-9a-f]{$hexLength})\b")
+	if (-not $match.Success) { throw "$Algorithm was not found in $ChecksumUri" }
+	return $match.Groups[1].Value.ToLowerInvariant()
+}
+
+function Get-TlcGitHubReleaseAssetSha256 {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$Uri
+	)
+	$parsed = [Uri]$Uri
+	if ($parsed.Host -ne 'github.com') { return $null }
+	$match = [regex]::Match($parsed.AbsolutePath, '^/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+	if (-not $match.Success) { return $null }
+
+	$owner = [Uri]::UnescapeDataString($match.Groups[1].Value)
+	$repo = [Uri]::UnescapeDataString($match.Groups[2].Value)
+	$tag = [Uri]::UnescapeDataString($match.Groups[3].Value)
+	$assetName = [Uri]::UnescapeDataString($match.Groups[4].Value)
+	$escapedTag = [Uri]::EscapeDataString($tag)
+	$release = Invoke-TlcRestMethod -Uri "https://api.github.com/repos/$owner/$repo/releases/tags/$escapedTag" -Headers (Get-TlcGitHubHeaders)
+	$asset = @($release.assets) | Where-Object { [string]$_.name -eq $assetName } | Select-Object -First 1
+	$digest = if ($asset) { [string]$asset.digest } else { $null }
+	if ($digest -match '^sha256:([0-9a-fA-F]{64})$') {
+		return $Matches[1].ToLowerInvariant()
+	}
+
+	$checksumNames = @("$assetName.sha256.txt", "$assetName.sha256")
+	$checksumAsset = @($release.assets) |
+		Where-Object { [string]$_.name -in $checksumNames } |
+		Select-Object -First 1
+	$checksumUri = if ($checksumAsset) { [string]$checksumAsset.browser_download_url } else { $null }
+	if ($checksumUri) {
+		# A companion asset is unambiguous because its name includes the complete
+		# payload filename. Parse the sole SHA-256 value so both common publisher
+		# formats (hash-only and "hash filename") are supported.
+		return Get-TlcRemoteSha256 -ChecksumUri $checksumUri -Headers (Get-TlcGitHubHeaders)
+	}
+	return $null
+}
+
 function ConvertTo-TlcDockerPath {
 	param(
 		[Parameter(Mandatory=$true)][string]$Path
@@ -397,7 +595,12 @@ function Write-HfModelDockerIgnore {
 	$dockerIgnorePath = Join-Path $PkgRoot '.dockerignore'
 	$lines = @(
 		'.hf-tools',
-		'cache/hf-xet'
+		'cache/hf-xet',
+		'_stage',
+		'_stage/**',
+		'**/*.partial-*',
+		'**/*.tmp',
+		'**/*.temp'
 	)
 	Set-Content -LiteralPath $dockerIgnorePath -Value ($lines -join "`n") -NoNewline
 }
@@ -756,9 +959,17 @@ function Get-GitHubRelease {
 	$Latest = Find-LatestTag $filtered 'tag_name' $TagPattern
 	foreach ($Asset in $Latest.item.assets) {
 		if ($Asset.name -match $AssetPattern) {
+			$assetSha256 = $null
+			$assetDigest = [string]$Asset.digest
+			if ($assetDigest -match '^sha256:([0-9a-fA-F]{64})$') {
+				$assetSha256 = $Matches[1].ToLowerInvariant()
+				if (-not $global:TlcKnownAssetSha256) { $global:TlcKnownAssetSha256 = @{} }
+				$global:TlcKnownAssetSha256[[string]$Asset.browser_download_url] = $assetSha256
+			}
 			return @{
 				URL = $Asset.browser_download_url
 				Name = $Asset.name
+				ExpectedSha256 = $assetSha256
 				Identifier = $Latest.item.tag_name
 				Version = $Latest.version
 			}
@@ -797,11 +1008,23 @@ function Install-BuildTool {
 	param (
 		[Parameter(Mandatory=$true)][string]$AssetName,
 		[Parameter(Mandatory=$true)][string]$AssetURL,
-		[string]$ToolDir = '\pkg'
+		[string]$ToolDir,
+		[string]$ExpectedSha256,
+		[string]$ExpectedHash,
+		[ValidateSet('SHA256', 'SHA384', 'SHA512')][string]$ExpectedHashAlgorithm = 'SHA256',
+		[switch]$RequireValidAuthenticodeSignature,
+		[scriptblock]$SignatureVerifier
 	)
+	if (-not $ToolDir) { $ToolDir = Get-TlcPkgRoot }
+	if (-not $ExpectedSha256 -and -not $ExpectedHash -and $global:TlcKnownAssetSha256 -and $global:TlcKnownAssetSha256.ContainsKey($AssetURL)) {
+		$ExpectedSha256 = [string]$global:TlcKnownAssetSha256[$AssetURL]
+	}
+	if (-not $ExpectedSha256 -and -not $ExpectedHash -and $AssetURL -match '^https://nodejs\.org/dist/([^/]+)/([^/?#]+)$') {
+		$ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri "https://nodejs.org/dist/$($Matches[1])/SHASUMS256.txt" -AssetName $Matches[2]
+	}
 	$Asset = "$env:Temp\$AssetName"
 	Write-Output "downloading $AssetURL to $Asset"
-	Invoke-TlcWebRequest -Uri $AssetURL -OutFile $Asset
+	Invoke-TlcWebRequest -Uri $AssetURL -OutFile $Asset -ExpectedSha256 $ExpectedSha256 -ExpectedHash $ExpectedHash -ExpectedHashAlgorithm $ExpectedHashAlgorithm -RequireValidAuthenticodeSignature:$RequireValidAuthenticodeSignature -SignatureVerifier $SignatureVerifier
 	Expand-Archive $Asset $ToolDir
 }
 
@@ -866,6 +1089,8 @@ function Get-DotNetReleaseAsset {
 				return @{
 					Name = $name
 					URL = [string]$file.url
+					Hash = [string]$file.hash
+					HashAlgorithm = 'SHA512'
 					Version = [TlcSemanticVersion]::new($version)
 					VersionText = $version
 					ChannelVersion = [string]$channel.'channel-version'
@@ -888,6 +1113,101 @@ function Get-TlcPkgRoot {
     } catch {
         return $root
     }
+}
+
+function Get-TlcPkgPath {
+	param(
+		[string]$ChildPath
+	)
+	$root = Get-TlcPkgRoot
+	if ([string]::IsNullOrWhiteSpace($ChildPath)) { return $root }
+	return (Join-Path $root $ChildPath.TrimStart('\', '/'))
+}
+
+function ConvertTo-TlcCanonicalPathList {
+	[CmdletBinding()]
+	param(
+		[AllowNull()]
+		[AllowEmptyString()]
+		[string]$Value,
+
+		[string]$ContainedRoot
+	)
+
+	if ($null -eq $Value) { return $null }
+
+	$rootPath = $null
+	$rootPrefix = $null
+	if (-not [string]::IsNullOrWhiteSpace($ContainedRoot)) {
+		$rootPath = [IO.Path]::GetFullPath($ContainedRoot).TrimEnd('\', '/')
+		$rootPrefix = $rootPath + [IO.Path]::DirectorySeparatorChar
+	}
+
+	$normalized = foreach ($entry in ($Value -split ';')) {
+		if ([string]::IsNullOrWhiteSpace($entry)) {
+			$entry
+			continue
+		}
+
+		$candidate = $entry.Trim()
+		if (-not [IO.Path]::IsPathRooted($candidate)) {
+			if ($candidate -match '(^|[\\/])\.\.([\\/]|$)') {
+				throw "Relative path-list entry contains parent traversal: $candidate"
+			}
+			$candidate
+			continue
+		}
+
+		try {
+			$fullPath = [IO.Path]::GetFullPath($candidate)
+		} catch {
+			throw "Could not canonicalize path-list entry '$candidate': $($_.Exception.Message)"
+		}
+
+		if ($rootPath) {
+			$candidateForComparison = $candidate.Replace([IO.Path]::AltDirectorySeparatorChar, [IO.Path]::DirectorySeparatorChar)
+			$startedInsideRoot = $candidateForComparison.Equals($rootPath, [StringComparison]::OrdinalIgnoreCase) -or
+				$candidateForComparison.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)
+			$staysInsideRoot = $fullPath.Equals($rootPath, [StringComparison]::OrdinalIgnoreCase) -or
+				$fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)
+			if ($startedInsideRoot -and -not $staysInsideRoot) {
+				throw "Path-list entry escapes its required root '$rootPath': $candidate"
+			}
+		}
+
+		$fullPath
+	}
+
+	return ($normalized -join ';')
+}
+
+function Get-TlcStagingPath {
+	param(
+		[string]$ChildPath
+	)
+	$root = $env:TLC_STAGING_ROOT
+	if ([string]::IsNullOrWhiteSpace($root)) {
+		$root = Join-Path ([IO.Path]::GetTempPath()) 'toolchains-staging'
+	}
+	if ([string]::IsNullOrWhiteSpace($ChildPath)) { return $root }
+	return (Join-Path $root $ChildPath.TrimStart('\', '/'))
+}
+
+function Get-Tlc7ZipExecutable {
+	if ($global:Tlc7ZipExecutable -and (Test-Path -LiteralPath $global:Tlc7ZipExecutable -PathType Leaf)) {
+		return $global:Tlc7ZipExecutable
+	}
+	$sevenZipRoot = Join-Path ([IO.Path]::GetTempPath()) ("tlc-7zip-$PID")
+	$installer = Join-Path ([IO.Path]::GetTempPath()) '7z2501-x64.exe'
+	Invoke-TlcWebRequest -Uri 'https://github.com/ip7z/7zip/releases/download/25.01/7z2501-x64.exe' -OutFile $installer
+	if (Test-Path -LiteralPath $sevenZipRoot) { Remove-Item -LiteralPath $sevenZipRoot -Recurse -Force }
+	New-Item -ItemType Directory -Path $sevenZipRoot -Force | Out-Null
+	$proc = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$sevenZipRoot") -PassThru -Wait
+	if ($proc.ExitCode -ne 0) { throw "7-zip bootstrap installer failed with exit code $($proc.ExitCode)" }
+	$exe = Get-ChildItem -Path $sevenZipRoot -Recurse -Filter '7z.exe' -File | Select-Object -First 1
+	if (-not $exe) { throw 'Failed to bootstrap 7z.exe from the integrity-verified installer.' }
+	$global:Tlc7ZipExecutable = $exe.FullName
+	return $global:Tlc7ZipExecutable
 }
 
 
@@ -1117,6 +1437,7 @@ function Test-TlcEnvMap {
 	foreach ($p in $props) {
 		$name = $p.Name
 		$val = $p.Value
+		if ([string]::IsNullOrWhiteSpace([string]$name)) { throw "$Context contains an empty environment variable name" }
 		if ($null -eq $val) { continue }
 		if ($val -is [string]) { continue }
 		if ($val -is [System.Collections.IEnumerable] -and $val -isnot [string]) {

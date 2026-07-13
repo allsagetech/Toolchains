@@ -23,14 +23,18 @@ function global:Install-TlcPackage {
 	}
 	$Tag = $Latest.name
 	$AssetName = "$Tag.windows-amd64.zip"
+	$goRelease = Invoke-TlcRestMethod -Uri 'https://go.dev/dl/?mode=json'
+	$goFile = @($goRelease.files) | Where-Object { [string]$_.filename -eq $AssetName } | Select-Object -First 1
+	if (-not $goFile -or [string]$goFile.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Go release metadata is missing SHA-256 for $AssetName" }
 	$Params = @{
 		AssetName = $AssetName
 		AssetURL = "https://go.dev/dl/$AssetName"
+		ExpectedSha256 = [string]$goFile.sha256
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'go.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'go.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

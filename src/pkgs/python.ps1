@@ -24,13 +24,13 @@ function global:Install-TlcPackage {
 	$Tag = $Latest.name
 	$Version = $Tag.SubString(1)
 	$Installer = 'python-installer.exe'
-	Invoke-TlcWebRequest -Uri "https://www.python.org/ftp/python/$Version/python-$Version-amd64.exe" -OutFile $Installer
-	New-Item -ItemType Directory -Path '\pkg' -Force | Out-Null
-	$InstallDir = (Resolve-Path '\pkg').Path
+	Invoke-TlcWebRequest -Uri "https://www.python.org/ftp/python/$Version/python-$Version-amd64.exe" -OutFile $Installer -RequireValidAuthenticodeSignature
+	New-Item -ItemType Directory -Path (Get-TlcPkgRoot) -Force | Out-Null
+	$InstallDir = (Resolve-Path (Get-TlcPkgRoot)).Path
 	Start-Process -Wait -PassThru ".\$Installer" "/quiet AssociateFiles=0 Shortcuts=0 Include_launcher=0 InstallLauncherAllUsers=0 InstallAllUsers=0 TargetDir=$InstallDir DefaultJustForMeTargetDir=$InstallDir DefaultAllUsersTargetDir=$InstallDir"
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'python.exe' | Select-Object -Last 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'python.exe' | Select-Object -Last 1).DirectoryName
 		}
 	}
 }

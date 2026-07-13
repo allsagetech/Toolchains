@@ -30,7 +30,7 @@ function global:Install-TlcPackage {
     $nodeAssetName = "node-$($nodeTag.Name)-win-x64.zip"
     Install-BuildTool -AssetName $nodeAssetName -AssetURL "https://nodejs.org/dist/$($nodeTag.Name)/$nodeAssetName"
 
-    $nodeRoot = (Get-ChildItem -Path '\pkg' -Recurse -Include 'node.exe' | Select-Object -First 1).DirectoryName
+    $nodeRoot = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'node.exe' | Select-Object -First 1).DirectoryName
     if (-not $nodeRoot) {
         throw 'Could not find node.exe after extracting the Node.js archive.'
     }

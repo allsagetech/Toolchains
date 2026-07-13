@@ -1,0 +1,11 @@
+# Repository-level safety defaults. Package builds also materialize these
+# exclusions in their generated package-root build contexts.
+.git
+.github
+cache
+cache/**
+_stage
+_stage/**
+**/*.partial-*
+**/*.tmp
+**/*.temp

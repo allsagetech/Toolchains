@@ -27,7 +27,7 @@ function global:Install-TlcPackage {
 		AssetURL = $Asset.URL
 	}
 	Install-BuildTool @Params
-	$pkgRoot = if ($env:TLC_PKG_ROOT) { $env:TLC_PKG_ROOT } else { '\pkg' }
+	$pkgRoot = Get-TlcPkgRoot
 	Write-TlcVars @{
 		env = @{
 			path = (Get-ChildItem -Path $pkgRoot -Recurse -Include 'chrome.exe' | Select-Object -First 1).DirectoryName
@@ -36,7 +36,7 @@ function global:Install-TlcPackage {
 }
 
 function global:Test-TlcPackageInstall {
-	$pkgRoot = if ($env:TLC_PKG_ROOT) { $env:TLC_PKG_ROOT } else { '\\pkg' }
+	$pkgRoot = Get-TlcPkgRoot
 	$chromeExe = Get-ChildItem -Path $pkgRoot -Recurse -Filter 'chrome.exe' | Select-Object -First 1
 	if (-not $chromeExe) { throw "chrome.exe not found under $pkgRoot" }
 

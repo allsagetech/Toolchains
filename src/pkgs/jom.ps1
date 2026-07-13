@@ -24,18 +24,20 @@ function global:Install-TlcPackage {
 	$Tag = $Latest.name
 	$Version = $Tag.SubString(1).replace('.', '_')
 	$AssetName = "jom_$Version.zip"
+	$AssetURL = "https://download.qt.io/official_releases/jom/$AssetName"
 	$Params = @{
 		AssetName = $AssetName
-		AssetURL = "http://qt.mirror.constant.com/official_releases/jom/$AssetName"
+		AssetURL = $AssetURL
+		ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri "$AssetURL.sha256"
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'jom.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'jom.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }
 
 function global:Test-TlcPackageInstall {
-	Get-Content '\pkg\.tlc'
+	Get-Content (Get-TlcPkgPath '.tlc')
 }

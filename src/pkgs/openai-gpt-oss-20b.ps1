@@ -127,8 +127,9 @@ function global:Write-GptOssLayeredDockerfile {
         $dockerLines += "COPY $relPath /$relPath"
     }
 
-    Set-Content -LiteralPath $dockerfilePath -Value ($dockerLines -join "`n") -NoNewline
-    return $dockerfilePath
+	Set-Content -LiteralPath $dockerfilePath -Value ($dockerLines -join "`n") -NoNewline
+	Write-HfModelDockerIgnore -PkgRoot $PkgRoot
+	return $dockerfilePath
 }
 
 function global:Install-TlcPackage {

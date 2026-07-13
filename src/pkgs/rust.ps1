@@ -22,16 +22,21 @@ function global:Install-TlcPackage {
 		return
 	}
 	Write-Host 'setting environment variables for installation'
-	foreach ($dir in @('\pkg', '\pkg\.rustup','\pkg\.cargo')) {
+	$pkgRoot = Get-TlcPkgRoot
+	$rustupHome = Get-TlcPkgPath '.rustup'
+	$cargoHome = Get-TlcPkgPath '.cargo'
+	foreach ($dir in @($pkgRoot, $rustupHome, $cargoHome)) {
 		New-Item -Path $dir -ItemType Directory -Force -ErrorAction Ignore | Out-Null
 	}
-	[System.Environment]::SetEnvironmentVariable('RUSTUP_HOME', '\pkg\.rustup')
-	[System.Environment]::SetEnvironmentVariable('CARGO_HOME', '\pkg\.cargo')
-	[System.Environment]::SetEnvironmentVariable('Path', "\pkg\.cargo\bin;$env:Path")
+	[System.Environment]::SetEnvironmentVariable('RUSTUP_HOME', $rustupHome)
+	[System.Environment]::SetEnvironmentVariable('CARGO_HOME', $cargoHome)
+	[System.Environment]::SetEnvironmentVariable('Path', "$(Join-Path $cargoHome 'bin');$env:Path")
 	Write-Host "Path=$env:Path"
 	Write-Host 'downloading rustup-init'
 	$init = "$env:Temp\rustup-init.exe"
-	Invoke-TlcWebRequest -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $init
+	$rustupUri = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+	$rustupSha256 = Get-TlcRemoteSha256 -ChecksumUri "$rustupUri.sha256"
+	Invoke-TlcWebRequest -Uri $rustupUri -OutFile $init -ExpectedSha256 $rustupSha256
 	Write-Host "installing rust $($latest.Version)"
 	& $init --version
 	if ($LASTEXITCODE -ne 0) {
@@ -58,9 +63,9 @@ function global:Install-TlcPackage {
 	}
 	Write-TlcVars @{
 		env = @{
-			cargo_home = '\pkg\.cargo'
-			rustup_home = '\pkg\.rustup'
-			path = '\pkg\.cargo\bin', (Get-ChildItem -Path '\pkg\.rustup' -Recurse -Include 'rustc.exe' | Select-Object -First 1).DirectoryName -join ';'
+			cargo_home = $cargoHome
+			rustup_home = $rustupHome
+			path = (Join-Path $cargoHome 'bin'), (Get-ChildItem -Path $rustupHome -Recurse -Include 'rustc.exe' | Select-Object -First 1).DirectoryName -join ';'
 		}
 	}
 }

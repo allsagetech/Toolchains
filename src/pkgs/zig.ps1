@@ -23,14 +23,18 @@ function global:Install-TlcPackage {
 	}
 	$Tag = $Latest.name
 	$AssetName = "zig-x86_64-windows-$Tag.zip"
+	$zigIndex = Invoke-TlcRestMethod -Uri 'https://ziglang.org/download/index.json'
+	$zigFile = $zigIndex.$Tag.'x86_64-windows'
+	if (-not $zigFile -or [string]$zigFile.shasum -notmatch '^[0-9a-fA-F]{64}$') { throw "Zig release metadata is missing SHA-256 for $AssetName" }
 	$Params = @{
 		AssetName = $AssetName
-		AssetURL = "https://ziglang.org/download/$Tag/$AssetName"
+		AssetURL = [string]$zigFile.tarball
+		ExpectedSha256 = [string]$zigFile.shasum
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'zig.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'zig.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

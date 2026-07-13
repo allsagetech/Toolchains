@@ -78,7 +78,7 @@ function global:Install-TlcPackage {
     }
 
     Write-Output "Installing Visual Studio Build Tools v$($TlcPackageConfig.Version)..."
-    Invoke-WebRequest -UseBasicParsing $VSInfo.URI -OutFile 'vs_buildtools.exe'
+	Invoke-TlcWebRequest -Uri $VSInfo.URI -OutFile 'vs_buildtools.exe' -RequireValidAuthenticodeSignature
     $Options = @(
         "--add Microsoft.VisualStudio.Workload.VCTools",
         "--add Microsoft.VisualStudio.Component.VC.ASAN",
@@ -96,18 +96,23 @@ function global:Install-TlcPackage {
     }
     Write-Output 'Done Installing'
 
-    mkdir "${env:ProgramFiles(x86)}\pkg" -Force | Out-Null
-    New-Item -Type Junction -Target "${env:ProgramFiles(x86)}\pkg" -Path '\pkg'
-    Move-Item "${env:ProgramFiles(x86)}\Microsoft Visual Studio*", "${env:ProgramFiles(x86)}\Windows Kits" "${env:ProgramFiles(x86)}\pkg\"
+	$pkgRoot = Get-TlcPkgRoot
+	New-Item -ItemType Directory -Path $pkgRoot -Force | Out-Null
+	$packageRoots = @(
+		"${env:ProgramFiles(x86)}\Microsoft Visual Studio*"
+		"${env:ProgramFiles(x86)}\Microsoft SDKs"
+		"${env:ProgramFiles(x86)}\Windows Kits"
+	)
+	Move-Item -Path $packageRoots -Destination $pkgRoot
 
-    [System.IO.File]::WriteAllText('\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\winsdk.bat',
-        [System.IO.File]::ReadAllText('\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\winsdk.bat').
+    [System.IO.File]::WriteAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\winsdk.bat'),
+        [System.IO.File]::ReadAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\winsdk.bat')).
         Replace('reg query "%1\Microsoft\Microsoft SDKs\Windows\v10.0" /v "InstallationFolder"', 'echo InstallationFolder X %~dp0..\..\..\..\..\..\..\Windows Kits\10\').
         Replace('reg query "%1\Microsoft\Microsoft SDKs\Windows\v8.1" /v "InstallationFolder"', 'echo InstallationFolder X %~dp0..\..\..\..\..\..\..\Windows Kits\8.1\').
         Replace('reg query "%1\Microsoft\Windows Kits\Installed Roots" /v "KitsRoot10"', 'echo KitsRoot10 X %~dp0..\..\..\..\..\..\..\Windows Kits\10\'))
 
-    [System.IO.File]::WriteAllText('\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\ext\vcvars\vcvars140.bat',
-        [System.IO.File]::ReadAllText('\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\ext\vcvars\vcvars140.bat').
+    [System.IO.File]::WriteAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\ext\vcvars\vcvars140.bat'),
+        [System.IO.File]::ReadAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\ext\vcvars\vcvars140.bat')).
         Replace('reg query "%1\Microsoft\VisualStudio\SxS\VC7" /v "14.0"', 'echo 14.0 X %~dp0..\..\..\..\..\..\..\..\Microsoft Visual Studio 14.0\VC\'))
 
     Write-Output 'Done Hacking'
@@ -117,6 +122,7 @@ function global:Install-TlcPackage {
         foreach ($arch in $msvc.Archs) {
             Write-Output "Evaluating variables for configuration $($msvc.name) on arch $arch"
             $vars = 'WindowsSdkBinPath', 'WindowsSdkVerBinPath', 'WindowsSDKVersion', 'VCToolsRedistDir', 'VSCMD_ARG_VCVARS_VER', 'UniversalCRTSdkDir', 'WindowsSdkDir', 'VCIDEInstallDir', 'VSCMD_ARG_HOST_ARCH', 'VSCMD_ARG_app_plat', 'VCToolsVersion', 'INCLUDE', 'EXTERNAL_INCLUDE', 'WindowsLibPath', 'VCToolsInstallDir', 'VCINSTALLDIR', 'VS170COMNTOOLS', 'LIBPATH', 'path', 'UCRTVersion', 'DevEnvDir', 'WindowsSDKLibVersion', 'LIB', 'VSCMD_VER', 'VSINSTALLDIR', 'VSCMD_ARG_TGT_ARCH', 'VisualStudioVersion'
+            $pathListVars = 'WindowsSdkBinPath', 'WindowsSdkVerBinPath', 'VCToolsRedistDir', 'UniversalCRTSdkDir', 'WindowsSdkDir', 'VCIDEInstallDir', 'INCLUDE', 'EXTERNAL_INCLUDE', 'WindowsLibPath', 'VCToolsInstallDir', 'VCINSTALLDIR', 'VS170COMNTOOLS', 'LIBPATH', 'path', 'DevEnvDir', 'LIB', 'VSINSTALLDIR'
             foreach ($v in $vars) {
                 Clear-Item "env:$v" -Force -ErrorAction SilentlyContinue
             }
@@ -124,7 +130,7 @@ function global:Install-TlcPackage {
 
             $path      = 'C:\windows;C:\windows\system32;C:\windows\system32\WindowsPowerShell\v1.0'
             $env:path  = $path
-            $vsSetup   = "`"$((Get-ChildItem -Path '\pkg' -Recurse -Include 'VsDevCmd.bat' | Select-Object -First 1).FullName)`" $(if ($msvc.Ver) { "-vcvars_ver=$($msvc.Ver)" }) -arch=$arch -host_arch=amd64"
+            $vsSetup   = "`"$((Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'VsDevCmd.bat' | Select-Object -First 1).FullName)`" $(if ($msvc.Ver) { "-vcvars_ver=$($msvc.Ver)" }) -arch=$arch -host_arch=amd64"
             Write-Output 'Starting Dev Setup'
             $vsenv     = cmd /S /C "$vsSetup && set"
             $vsenv.Split([Environment]::NewLine, [StringSplitOptions]::RemoveEmptyEntries) |
@@ -140,8 +146,12 @@ function global:Install-TlcPackage {
 
             $map = @{}
             foreach ($var in $vars) {
-                $map.$var = Get-Item "env:$var" -ErrorAction SilentlyContinue |
-                    ForEach-Object { $_.value.Replace("${env:ProgramFiles(x86)}", '\pkg') }
+                $value = Get-Item "env:$var" -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.value.Replace("${env:ProgramFiles(x86)}", (Get-TlcPkgRoot)) }
+                if ($null -ne $value -and $pathListVars -contains $var) {
+                    $value = ConvertTo-TlcCanonicalPathList -Value $value -ContainedRoot (Get-TlcPkgRoot)
+                }
+                $map.$var = $value
                 Write-Output "  $var=$($map.$var)"
             }
             $map.path = $map.path.Replace($path, '')
@@ -159,7 +169,7 @@ function global:Install-TlcPackage {
         }
     }
 
-    Get-ChildItem '\pkg\Windows Kits' '10.0.*' -Recurse -Exclude $TlcPackageVars.env.UCRTVersion |
+    Get-ChildItem (Get-TlcPkgPath 'Windows Kits') '10.0.*' -Recurse -Exclude $TlcPackageVars.env.UCRTVersion |
         Remove-Item -Recurse -Force
 
     Write-TlcVars $TlcPackageVars
@@ -186,7 +196,14 @@ function global:Test-TlcPackageInstall {
     }
 }
 
-function global:Invoke-CustomDockerBuild($tag) {
-    Copy-Item Dockerfile -Destination "${env:ProgramFiles(x86)}\Dockerfile.vs-buildtools"
-    & docker build -f "${env:ProgramFiles(x86)}\Dockerfile.vs-buildtools" -t $tag "${env:ProgramFiles(x86)}\pkg"
+function global:Invoke-CustomDockerBuild($tag, [string[]]$labels) {
+	$pkgRoot = Get-TlcPkgRoot
+	$dockerfile = Join-Path $pkgRoot 'Dockerfile.vs-buildtools'
+	Copy-Item Dockerfile -Destination $dockerfile
+	Set-TlcPackageDockerignore -PkgRoot $pkgRoot
+	$args = @('build', '-f', $dockerfile, '-t', $tag)
+	foreach ($label in $labels) { $args += @('--label', $label) }
+	$args += $pkgRoot
+	& docker @args
+	if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE for $tag" }
 }

@@ -19,12 +19,14 @@ function global:Install-TlcPackage {
 	$Params = @{
 		AssetName = $Latest.Name
 		AssetURL = $Latest.URL
+		ExpectedHash = $Latest.Hash
+		ExpectedHashAlgorithm = $Latest.HashAlgorithm
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'dotnet.exe' | Select-Object -First 1).DirectoryName
-			dotnet_root = '\pkg'
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'dotnet.exe' | Select-Object -First 1).DirectoryName
+			dotnet_root = Get-TlcPkgRoot
 		}
 	}
 }

@@ -22,14 +22,16 @@ function global:Install-TlcPackage {
 		return
 	}
 	$Tag = $Latest.name
+	$AssetURL = "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$Tag.zip"
 	$Params = @{
 		AssetName = 'sonar-scanner.zip'
-		AssetURL = "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$Tag.zip"
+		AssetURL = $AssetURL
+		ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri "$AssetURL.sha256"
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'sonar-scanner' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'sonar-scanner' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

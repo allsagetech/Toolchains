@@ -21,11 +21,18 @@ function global:Install-TlcPackage {
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	$AssetName = 'miktexsetup-x64.zip'
+	$downloadPage = [Net.WebUtility]::HtmlDecode([string](Invoke-TlcWebRequest -Uri 'https://miktex.org/download').Content)
+	$fileMatch = [regex]::Match($downloadPage, '(?i)\b(miktexsetup-[0-9.+-]+-x64\.zip)\b')
+	if (-not $fileMatch.Success) { throw 'MiKTeX download metadata is missing the setup utility filename.' }
+	$AssetName = $fileMatch.Groups[1].Value
+	$metadataTail = $downloadPage.Substring($fileMatch.Index, [Math]::Min(1600, $downloadPage.Length - $fileMatch.Index))
+	$hashMatch = [regex]::Match($metadataTail, '(?is)SHA-256:</div>.*?([0-9a-f]{64})</div>')
+	if (-not $hashMatch.Success) { throw "MiKTeX download metadata is missing SHA-256 for $AssetName" }
 	$PackageSet = 'basic'
-	$ToolDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath("\pkg")
+	$ToolDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Get-TlcPkgRoot))
 	$Asset = "$env:Temp/$AssetName"
-	Invoke-TlcWebRequest -Uri "https://miktex.org/download/win/$AssetName" -OutFile $Asset
+	$AssetURL = "https://miktex.org/download/ctan/systems/win32/miktex/setup/windows-x64/$AssetName"
+	Invoke-TlcWebRequest -Uri $AssetURL -OutFile $Asset -ExpectedSha256 $hashMatch.Groups[1].Value
 	Expand-Archive $Asset 'miktexsetup'
 	& 'miktexsetup\miktexsetup_standalone.exe' --verbose "--package-set=$PackageSet" download
 	& 'miktexsetup\miktexsetup_standalone.exe' --verbose "--package-set=$PackageSet" "--portable=$ToolDir" install

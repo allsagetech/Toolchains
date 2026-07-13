@@ -9,12 +9,17 @@ $global:TlcPackageConfig = @{
 }
 
 function global:Install-TlcPackage {
+	$versionOutput = @(& npm view pnpm version) | Select-Object -Last 1
+	if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$versionOutput)) {
+		throw "npm view pnpm version failed with exit code $LASTEXITCODE"
+	}
+	$version = ([string]$versionOutput).Trim()
+	$upstream = [TlcSemanticVersion]::new($version)
+	$TlcPackageConfig.Version = $version
+	$TlcPackageConfig.UpToDate = -not $upstream.LaterThan($TlcPackageConfig.Latest)
+	if ($TlcPackageConfig.UpToDate) { return }
 
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for pnpm.'
-    }
-
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT 'pnpm'
+	$InstallRoot = Get-TlcPkgPath 'pnpm'
 
     if (-not (Test-Path $InstallRoot)) {
         New-Item -ItemType Directory -Path $InstallRoot | Out-Null
@@ -22,22 +27,13 @@ function global:Install-TlcPackage {
 
     $env:npm_config_prefix = $InstallRoot
 
-    & npm install -g pnpm
+	& npm install -g "pnpm@$version"
 
     if ($LASTEXITCODE -ne 0) {
         throw "npm install -g pnpm failed with exit code $LASTEXITCODE. Make sure the 'node' package is installed and npm is on PATH."
     }
 
-    $PnpmCmd = Join-Path $InstallRoot 'pnpm.cmd'
-    if (Test-Path $PnpmCmd) {
-        $version = & $PnpmCmd --version
-        if ($LASTEXITCODE -eq 0 -and $version) {
-            $TlcPackageConfig.Version  = $version.Trim()
-            $TlcPackageConfig.UpToDate = $true
-        }
-    }
-
-    Write-TlcVars @{
+	Write-TlcVars @{
         env = @{
             path = $InstallRoot
         }

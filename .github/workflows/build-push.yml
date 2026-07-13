@@ -1,9 +1,8 @@
 # <#
-# Toolchain
+# Toolchains
 # Copyright (c) 2026 AllSageTech
 # SPDX-License-Identifier: MPL-2.0
 # #>
-
 name: Build Toolchain Packages
 
 on:
@@ -15,91 +14,125 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Immutable Toolchain consumer used for package execution and local image contracts.
+  # Update only after the corresponding Toolchain commit has passed its release gates.
+  TOOLCHAIN_REPO: allsagetech/toolchain
+  TOOLCHAIN_REF: 10342606bb137f6a9823a8bc8ca4f7f75a1a40d2
+  TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
 
 jobs:
   init:
-    if: ${{ github.event_name != 'pull_request' }}
+    name: Select package matrix
     runs-on: windows-2022
+    timeout-minutes: 15
     outputs:
       matrix: ${{ steps.init.outputs.matrix }}
+      has-packages: ${{ steps.init.outputs.has-packages }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Toolchain module
-        shell: pwsh
-        env:
-          TOOLCHAIN_REPO: allsagetech/toolchain
-          TOOLCHAIN_REF: pipeline
-          GH_TOKEN: ${{ github.token }}
-        run: .\scripts\install-toolchain.ps1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Analyze packages
         id: init
         shell: pwsh
-        env:
-          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-
           . .\src\main.ps1
-          Save-WorkflowMatrix
 
-          $raw = Get-Content .matrix -Raw
-          $obj = $raw | ConvertFrom-Json
-
-          if ($null -eq $obj.include -or @($obj.include).Count -eq 0) {
-            Write-Host "Save-WorkflowMatrix returned 0 packages; falling back to all scripts in .\src\pkgs\"
-            $all = Get-ChildItem -Path .\src\pkgs\ -Filter *.ps1 -Recurse | Sort-Object -Property FullName
-            $include = foreach ($script in $all) {
-              Clear-TlcPackageScript
-              & $script.FullName
-              Test-TlcPackageScript
-
-              $runsOn = if ($TlcPackageConfig.RunsOn) { $TlcPackageConfig.RunsOn } else { Get-TlcDefaultWindowsRunner }
-              $publishRunsOn = if ($TlcPackageConfig.PublishRunsOn) { $TlcPackageConfig.PublishRunsOn } elseif (Test-TlcRunsOnUbuntu -RunsOn $runsOn) { $runsOn } else { Get-TlcDefaultWindowsDockerRunner }
-              $tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-              [pscustomobject]@{
-                package            = $script.FullName.Replace((Get-Location).Path, '.')
-                runs_on            = $runsOn
-                publish_runs_on    = $publishRunsOn
-                tier               = $tier
-                pkg_root           = Get-TlcPkgRootForRunner -RunsOn $runsOn
-                cache_path         = Get-TlcCachePathForRunner -RunsOn $runsOn
-                publish_pkg_root   = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn
-                publish_cache_path = Get-TlcCachePathForRunner -RunsOn $publishRunsOn
-              }
-            }
+          function New-MatrixEntry([IO.FileInfo]$Script, [bool]$ForceBuild) {
             Clear-TlcPackageScript
-            $raw = (ConvertTo-Json @{ include = @($include) } -Compress)
-            $obj = $raw | ConvertFrom-Json
+            & $Script.FullName
+            Test-TlcPackageScript
+
+            $runsOn = Get-TlcPackageRunsOn
+            $publishRunsOn = Get-TlcPackagePublishRunsOn
+            $tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
+            $verifiedDownloads = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
+            [pscustomobject]@{
+              package = $Script.FullName.Replace((Get-Location).Path, '.')
+              runs_on = $runsOn
+              publish_runs_on = $publishRunsOn
+              tier = $tier
+              force_build = $ForceBuild
+              verified_downloads = $verifiedDownloads
+              publish_eligible = $verifiedDownloads
+              unverified_download_reason = if ($verifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
+              pkg_root = Get-TlcPkgRootForRunner -RunsOn $runsOn
+              cache_path = Get-TlcCachePathForRunner -RunsOn $runsOn
+              publish_pkg_root = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn
+              publish_cache_path = Get-TlcCachePathForRunner -RunsOn $publishRunsOn
+            }
           }
 
-          $include = @($obj.include)
-          $isPullRequest = ($env:GITHUB_EVENT_NAME -eq 'pull_request')
-          $isMainPush = ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main')
-          $isScheduled = ($env:GITHUB_EVENT_NAME -eq 'schedule')
-          $isManual = ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch')
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            $baseRef = "origin/$env:GITHUB_BASE_REF"
+            $changed = @(& git diff --name-only "$baseRef...HEAD" -- 'src/pkgs/**/*.ps1' 'src/pkgs/*.ps1')
+            if ($LASTEXITCODE -ne 0) { throw "git diff failed for $baseRef...HEAD" }
 
-          if ($isPullRequest) {
-            $include = @()
+            # Always exercise one real Windows package and one real Linux package.
+            $paths = @('src/pkgs/websocat.ps1', 'src/pkgs/git-linux.ps1') + $changed
+            $entries = @()
+            foreach ($path in ($paths | Sort-Object -Unique)) {
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+              $entry = New-MatrixEntry (Get-Item -LiteralPath $path) $true
+              # Large models retain their dedicated self-hosted release runner and never
+              # execute untrusted pull-request code there. Their schemas are still covered
+              # by the required validation job.
+              if ($entry.tier -eq 'model-large') {
+                Write-Host "Skipping large-model PR build on a self-hosted runner: $path"
+                continue
+              }
+              if (-not [bool]$entry.verified_downloads -or -not [bool]$entry.publish_eligible) {
+                Write-Output "::warning file=$path,title=Package quarantined::$($entry.unverified_download_reason)"
+                continue
+              }
+              $entries += $entry
+            }
           } else {
-            $include = @($include | Where-Object {
+            Save-WorkflowMatrix
+            $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
+            $entries = @($obj.include)
+
+            foreach ($entry in @($entries | Where-Object { -not [bool]$_.verified_downloads -or -not [bool]$_.publish_eligible })) {
+              Write-Output "::warning file=$($entry.package),title=Package quarantined::$($entry.unverified_download_reason)"
+            }
+            $entries = @($entries | Where-Object { [bool]$_.verified_downloads -and [bool]$_.publish_eligible })
+
+            if ($entries.Count -eq 0) {
+              Write-Host 'No publication-eligible outdated packages were discovered.'
+            }
+
+            $isMainPush = $env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main'
+            $isScheduled = $env:GITHUB_EVENT_NAME -eq 'schedule'
+            $isManual = $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch'
+            $isProtectedRelease = $env:GITHUB_REF -eq 'refs/heads/main' -or $env:GITHUB_REF.StartsWith('refs/heads/release/')
+
+            $entries = @($entries | Where-Object {
               $tier = if ($_.tier) { [string]$_.tier } else { 'tooling' }
               $baseName = [IO.Path]::GetFileNameWithoutExtension([string]$_.package)
-              $matchesRef = $false
-              if ($env:GITHUB_REF_NAME) {
-                $matchesRef = ($env:GITHUB_REF_NAME -eq $baseName -or $env:GITHUB_REF_NAME.StartsWith("$baseName-"))
-              }
+              $matchesRef = $env:GITHUB_REF_NAME -and (
+                $env:GITHUB_REF_NAME -eq $baseName -or $env:GITHUB_REF_NAME.StartsWith("$baseName-")
+              )
 
-              ($tier -eq 'tooling') -or
+              if (-not $isProtectedRelease) {
+                return $tier -eq 'tooling'
+              }
+              return ($tier -eq 'tooling') -or
                 ($tier -eq 'model-small' -and ($isMainPush -or $isScheduled -or $isManual -or $matchesRef)) -or
                 ($tier -eq 'model-large' -and ($isScheduled -or $isManual -or $matchesRef))
             })
 
-            foreach ($entry in $include) {
+            foreach ($entry in $entries) {
+              $entry | Add-Member -NotePropertyName force_build -NotePropertyValue $false -Force
               $tier = if ($entry.tier) { [string]$entry.tier } else { 'tooling' }
               if ($tier -eq 'model-large') {
                 $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
@@ -110,398 +143,651 @@ jobs:
                 $entry.publish_cache_path = '/mnt/toolchains-pkg/cache'
               }
             }
-
           }
 
-          $raw = (ConvertTo-Json @{ include = $include } -Depth 50 -Compress)
-          "matrix=$raw" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Clear-TlcPackageScript
+          $matrix = ConvertTo-Json @{ include = @($entries) } -Depth 50 -Compress
+          "matrix=$matrix" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $hasPackages = ([bool](@($entries).Count -gt 0)).ToString().ToLowerInvariant()
+          "has-packages=$hasPackages" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-  test:
-    runs-on: windows-2022
+  validate:
+    name: Validate (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows PowerShell 7
+            os: windows-2022
+            shell: pwsh
+          - name: Windows PowerShell 5.1
+            os: windows-2022
+            shell: powershell
+          - name: Linux PowerShell 7
+            os: ubuntu-22.04
+            shell: pwsh
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-      - name: Validate Toolchains scripts
+      - name: Validate scripts and package metadata (PowerShell 7)
+        if: matrix.shell == 'pwsh'
         shell: pwsh
         run: .\scripts\test-toolchains.ps1
 
-  build:
-    needs: [init, test]
-    if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ${{ matrix.runs_on }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.init.outputs.matrix) }}
+      - name: Validate scripts and package metadata (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: .\scripts\test-toolchains.ps1
 
-    env:
-      GH_TOKEN: ${{ github.token }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
-      TLC_PKG_ROOT: ${{ matrix.pkg_root }}
-      TLC_COSIGN_SIGN: '1'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-
-      - name: Set up Java (required for SonarScanner 8.x)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "11"
-
-      - name: Verify Java
+      - name: Validate versioned package specification (PowerShell 7)
+        if: matrix.shell == 'pwsh'
         shell: pwsh
-        run: |
-          java -version
-          Write-Host "JAVA_HOME=$env:JAVA_HOME"
+        run: .\scripts\test-package-spec.ps1
 
-      - name: Prepare Package Storage (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo mkdir -p /mnt/toolchains-pkg/cache
-          sudo chown -R "$(id -u):$(id -g)" /mnt/toolchains-pkg
+      - name: Validate versioned package specification (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: .\scripts\test-package-spec.ps1
 
-      - name: Ensure cache directory
+      - name: Report packages quarantined from publication (PowerShell 7)
+        if: matrix.shell == 'pwsh'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
-
-      - name: Cache downloads
-        uses: actions/cache@v4
-        with:
-          path: ${{ matrix.cache_path }}
-          key: tlc-cache-${{ runner.os }}-${{ github.ref_name }}-${{ hashFiles('src/util.ps1', 'src/pkgs/**') }}
-          restore-keys: |
-            tlc-cache-${{ runner.os }}-${{ github.ref_name }}-
-            tlc-cache-${{ runner.os }}-
-
-      - name: Install Toolchain module
-        shell: pwsh
-        env:
-          TOOLCHAIN_REPO: allsagetech/toolchain
-          TOOLCHAIN_REF: pipeline
-          GH_TOKEN: ${{ github.token }}
-        run: .\scripts\install-toolchain.ps1
-
-      - name: Run ${{ matrix.package }}
-        id: pkg
-        shell: pwsh
-        env:
-          TLC_PKG_ROOT: ${{ matrix.pkg_root }}
-          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $scriptRel = '${{ matrix.package }}'
-          $isVsBuildTools = $scriptRel -match 'vs-buildtools\.ps1$'
-
-          if ($isVsBuildTools) {
-            if (Test-Path $env:TLC_PKG_ROOT) { Remove-Item -Recurse -Force $env:TLC_PKG_ROOT }
-          } else {
-            if (Test-Path $env:TLC_PKG_ROOT) {
-              Get-ChildItem -LiteralPath $env:TLC_PKG_ROOT -Force |
-                Where-Object { $_.Name -ne 'cache' } |
-                Remove-Item -Recurse -Force
-            } else {
-              New-Item -ItemType Directory -Path $env:TLC_PKG_ROOT -Force | Out-Null
+          . .\src\main.ps1
+          $quarantined = @()
+          foreach ($script in Get-ChildItem -Path .\src\pkgs -Filter *.ps1 -Recurse -File) {
+            Clear-TlcPackageScript
+            & $script.FullName
+            Test-TlcPackageScript
+            $verified = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
+            if (-not $verified) {
+              $reason = [string]$TlcPackageConfig.UnverifiedDownloadReason
+              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $reason"
+              $quarantined += $TlcPackageConfig.Name
             }
-            New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
           }
-
-          if ($env:RUNNER_OS -eq 'Windows' -and (Test-Path $env:TLC_PKG_ROOT)) {
-            if (Test-Path 'C:\pkg') { Remove-Item -Recurse -Force 'C:\pkg' }
-            cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
-          }
-
-          . .\src\main.ps1
           Clear-TlcPackageScript
+          Write-Host "Quarantined package count: $($quarantined.Count)"
 
-          $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
-          Invoke-TlcScript $scriptPath
-
-          "script=$scriptRel" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Scan package
-        if: ${{ runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False' }}
-        shell: pwsh
-        env:
-          TLC_PKG_ROOT: ${{ matrix.pkg_root }}
+      - name: Report packages quarantined from publication (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'C:\pkg')) {
-            cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
-          }
           . .\src\main.ps1
-          Invoke-TlcPackageScan
+          $quarantined = @()
+          foreach ($script in Get-ChildItem -Path .\src\pkgs -Filter *.ps1 -Recurse -File) {
+            Clear-TlcPackageScript
+            & $script.FullName
+            Test-TlcPackageScript
+            $verified = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
+            if (-not $verified) {
+              $reason = [string]$TlcPackageConfig.UnverifiedDownloadReason
+              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $reason"
+              $quarantined += $TlcPackageConfig.Name
+            }
+          }
+          Clear-TlcPackageScript
+          Write-Host "Quarantined package count: $($quarantined.Count)"
 
-  publish:
-    needs: [init, test, build]
-    if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) }}
-    runs-on: ${{ matrix.publish_runs_on }}
+  pr-smoke:
+    name: PR smoke (${{ matrix.package }})
+    needs: [init, validate]
+    if: ${{ github.event_name == 'pull_request' && needs.init.outputs.has-packages == 'true' }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.init.outputs.matrix) }}
-
     env:
+      TLC_PKG_ROOT: ${{ matrix.pkg_root }}
+      TLC_REQUIRE_VERIFIED_DOWNLOADS: '1'
       GH_TOKEN: ${{ github.token }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
-      TLC_PKG_ROOT: ${{ matrix.publish_pkg_root }}
-      TLC_COSIGN_SIGN: '1'
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Enforce verified-download publication policy
+        if: matrix.verified_downloads != true || matrix.publish_eligible != true
+        shell: pwsh
+        env:
+          QUARANTINE_REASON: ${{ matrix.unverified_download_reason }}
+        run: |
+          throw "Package is quarantined from CI builds/publication: $env:QUARANTINE_REASON"
 
-      - name: Prepare Package Storage (Linux)
+      - name: Checkout Toolchains
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned Toolchain contract source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: allsagetech/toolchain
+          ref: 10342606bb137f6a9823a8bc8ca4f7f75a1a40d2
+          path: .ci/toolchain-contract
+          persist-credentials: false
+
+      - name: Install pinned Toolchain module
+        shell: pwsh
+        run: .\scripts\install-toolchain.ps1 -Repo $env:TOOLCHAIN_REPO -Ref $env:TOOLCHAIN_REF
+
+      - name: Prepare Linux package mount
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          PACKAGE_ROOT: ${{ matrix.pkg_root }}
         run: |
           set -euo pipefail
-          sudo mkdir -p /mnt/toolchains-pkg/cache
-          sudo chown -R "$(id -u):$(id -g)" /mnt/toolchains-pkg
+          sudo mkdir -p "$PACKAGE_ROOT"
+          sudo chown -R "$(id -u):$(id -g)" "$PACKAGE_ROOT"
 
-      - name: Ensure cache directory
+      - name: Prepare package root
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
-
-      - name: Cache downloads
-        uses: actions/cache@v4
-        with:
-          path: ${{ matrix.publish_cache_path }}
-          key: tlc-publish-cache-${{ runner.os }}-${{ github.ref_name }}-${{ hashFiles('src/util.ps1', 'src/pkgs/**') }}
-          restore-keys: |
-            tlc-publish-cache-${{ runner.os }}-${{ github.ref_name }}-
-            tlc-publish-cache-${{ runner.os }}-
-
-      - name: Install Toolchain module
-        shell: pwsh
-        env:
-          TOOLCHAIN_REPO: allsagetech/toolchain
-          TOOLCHAIN_REF: pipeline
-          GH_TOKEN: ${{ github.token }}
-        run: .\scripts\install-toolchain.ps1
-
-      - name: Prepare Docker Storage (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker_root="/mnt/docker-data"
-          sudo systemctl stop docker
-          sudo rm -rf /var/lib/docker
-          sudo mkdir -p "$docker_root"
-          sudo ln -s "$docker_root" /var/lib/docker
-          sudo systemctl start docker
-          docker info > /dev/null
+          $full = [IO.Path]::GetFullPath($env:TLC_PKG_ROOT)
+          if ($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/')) {
+            throw "Unsafe package root: $full"
+          }
+          if (Test-Path -LiteralPath $full) {
+            if ($env:RUNNER_OS -eq 'Linux') {
+              Get-ChildItem -LiteralPath $full -Force | Remove-Item -Recurse -Force
+            } else {
+              Remove-Item -LiteralPath $full -Recurse -Force
+            }
+          }
+          New-Item -ItemType Directory -Path $full -Force | Out-Null
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if (Test-Path -LiteralPath 'C:\pkg') { Remove-Item -LiteralPath 'C:\pkg' -Recurse -Force }
+            cmd /c "mklink /J C:\pkg `"$full`"" | Out-Null
+          }
 
       - name: Start Docker daemon (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $null = Get-Command docker -ErrorAction Stop
           $service = Get-Service -Name docker -ErrorAction SilentlyContinue
-          if ($service) {
-            if ($service.Status -ne 'Running') {
-              Start-Service -Name docker
-            }
-          } else {
-            $dockerd = Get-Command dockerd -ErrorAction SilentlyContinue
-            if (-not $dockerd) {
-              throw 'Docker CLI is installed, but neither the docker service nor dockerd.exe is available on this runner.'
-            }
-
+          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
+          if (-not $service) {
+            $dockerd = Get-Command dockerd -ErrorAction Stop
             $dockerRoot = Join-Path $env:RUNNER_TEMP 'docker-data'
             New-Item -ItemType Directory -Path $dockerRoot -Force | Out-Null
-            Start-Process -FilePath $dockerd.Source -ArgumentList @('--host', 'npipe:////./pipe/docker_engine', '--data-root', $dockerRoot) -WindowStyle Hidden
+            Start-Process -FilePath $dockerd.Source -ArgumentList @('--host','npipe:////./pipe/docker_engine','--data-root',$dockerRoot) -WindowStyle Hidden
           }
+          for ($attempt = 1; $attempt -le 45; $attempt++) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          throw 'Docker daemon did not become ready.'
 
-          $previousNativePreference = $global:PSNativeCommandUseErrorActionPreference
-          $global:PSNativeCommandUseErrorActionPreference = $false
-          try {
-            for ($attempt = 1; $attempt -le 45; $attempt++) {
-              docker info *> $null
-              if ($LASTEXITCODE -eq 0) {
-                docker version
-                docker info
-                exit 0
-              }
-              Start-Sleep -Seconds 2
+      - name: Force package lifecycle and build candidate image once
+        id: image
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\src\main.ps1
+          Clear-TlcPackageScript
+          $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
+          & $scriptPath
+          Test-TlcPackageScript
+
+          Invoke-TlcInit
+          $TlcPackageConfig.Latest = [TlcSemanticVersion]::new()
+          $TlcPackageConfig.Tags = @()
+          $TlcPackageConfig.UpToDate = $false
+          Install-TlcPackage
+          if ($TlcPackageConfig.UpToDate) {
+            throw 'A forced PR smoke build marked itself up-to-date without producing a package.'
+          }
+          Test-TlcPackageInstall
+          Assert-TlcDefinitionFile | Out-Null
+
+          $dockerIgnore = Join-Path $env:TLC_PKG_ROOT '.dockerignore'
+          if (-not (Test-Path -LiteralPath $dockerIgnore)) {
+            @('cache/','_stage/','artifacts/','*.tmp') | Set-Content -LiteralPath $dockerIgnore -Encoding utf8
+          }
+          $safeVersion = ([string]$TlcPackageConfig.Version).Replace('+','_')
+          $imageRef = "toolchains-pr-smoke:$($TlcPackageConfig.Name)-$safeVersion-$env:GITHUB_RUN_ID"
+          $dockerfileName = if ($TlcPackageConfig.Dockerfile) { [string]$TlcPackageConfig.Dockerfile } else { $null }
+          Invoke-DockerBuild $imageRef $TlcPackageConfig.Name $TlcPackageConfig.Version $dockerfileName
+          $imageId = (& docker image inspect --format '{{.Id}}' $imageRef | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $imageId) { throw "Could not resolve image ID for $imageRef" }
+
+          "image=$imageRef" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "image-id=$imageId" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Validate exact image with pinned Toolchain contract
+        shell: pwsh
+        run: |
+          .\.github\scripts\Test-LocalImageContract.ps1 `
+            -ImageRef '${{ steps.image.outputs.image }}' `
+            -ExpectedImageId '${{ steps.image.outputs.image-id }}' `
+            -PackageName '${{ steps.image.outputs.name }}' `
+            -PackageVersion '${{ steps.image.outputs.version }}' `
+            -PackageRoot $env:TLC_PKG_ROOT `
+            -ToolchainSource .\.ci\toolchain-contract
+
+  candidate-build:
+    name: Candidate (${{ matrix.package }})
+    needs: [init, validate]
+    if: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') && needs.init.outputs.has-packages == 'true' }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.init.outputs.matrix) }}
+    env:
+      TLC_PKG_ROOT: ${{ matrix.pkg_root }}
+      TLC_REQUIRE_VERIFIED_DOWNLOADS: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce verified-download build policy
+        if: matrix.verified_downloads != true || matrix.publish_eligible != true
+        shell: pwsh
+        env:
+          QUARANTINE_REASON: ${{ matrix.unverified_download_reason }}
+        run: |
+          throw "Package is quarantined from CI builds: $env:QUARANTINE_REASON"
+
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Toolchain module
+        shell: pwsh
+        run: .\scripts\install-toolchain.ps1 -Repo $env:TOOLCHAIN_REPO -Ref $env:TOOLCHAIN_REF
+
+      - name: Prepare Linux package mount
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PACKAGE_ROOT: ${{ matrix.pkg_root }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$PACKAGE_ROOT"
+          sudo chown -R "$(id -u):$(id -g)" "$PACKAGE_ROOT"
+
+      - name: Prepare package root
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $full = [IO.Path]::GetFullPath($env:TLC_PKG_ROOT)
+          if ($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/')) { throw "Unsafe package root: $full" }
+          if (Test-Path -LiteralPath $full) {
+            if ($env:RUNNER_OS -eq 'Linux') {
+              Get-ChildItem -LiteralPath $full -Force | Remove-Item -Recurse -Force
+            } else {
+              Remove-Item -LiteralPath $full -Recurse -Force
             }
-          } finally {
-            $global:PSNativeCommandUseErrorActionPreference = $previousNativePreference
+          }
+          New-Item -ItemType Directory -Path (Join-Path $full 'cache') -Force | Out-Null
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if (Test-Path -LiteralPath 'C:\pkg') { Remove-Item -LiteralPath 'C:\pkg' -Recurse -Force }
+            cmd /c "mklink /J C:\pkg `"$full`"" | Out-Null
           }
 
-          throw 'Docker daemon did not become ready on the Windows runner.'
+      - name: Run package lifecycle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\src\main.ps1
+          Clear-TlcPackageScript
+          Invoke-TlcScript (Resolve-Path '${{ matrix.package }}').Path
 
-      - name: Install Cosign (Windows)
+      - name: Scan Windows package payload
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $version = 'v2.6.0'
-          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-windows-amd64.exe"
-          $installDir = "$env:ProgramFiles\cosign"
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile "$installDir\cosign.exe"
-          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          if (Test-Path -LiteralPath (Join-Path $env:TLC_PKG_ROOT '.tlc')) {
+            . .\src\main.ps1
+            Invoke-TlcPackageScan
+          } else {
+            Write-Host 'Package became up-to-date after matrix selection; no payload to scan.'
+          }
 
-      - name: Install Cosign (Linux)
-        if: runner.os == 'Linux'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = 'v2.6.0'
-          $url = "https://github.com/sigstore/cosign/releases/download/$version/cosign-linux-amd64"
-          $installDir = Join-Path $env:RUNNER_TEMP 'cosign'
-          $binaryPath = Join-Path $installDir 'cosign'
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile $binaryPath
-          & chmod +x $binaryPath
-          "$installDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Verify Docker daemon
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          docker version
-          docker info
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Publish ${{ matrix.package }}
-        id: publish
+  release:
+    name: Release (${{ matrix.package }})
+    needs: [init, validate]
+    if: ${{ needs.init.outputs.has-packages == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) }}
+    runs-on: ${{ matrix.publish_runs_on }}
+    timeout-minutes: 720
+    environment: package-release
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.init.outputs.matrix) }}
+    env:
+      TLC_PKG_ROOT: ${{ matrix.publish_pkg_root }}
+      TLC_REQUIRE_VERIFIED_DOWNLOADS: '1'
+    steps:
+      - name: Enforce verified-download publication policy
+        if: matrix.verified_downloads != true || matrix.publish_eligible != true
         shell: pwsh
         env:
-          TLC_PKG_ROOT: ${{ matrix.publish_pkg_root }}
-          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+          QUARANTINE_REASON: ${{ matrix.unverified_download_reason }}
         run: |
-          $ErrorActionPreference = 'Stop'
+          throw "Package is quarantined from publication: $env:QUARANTINE_REASON"
 
-          $scriptRel = '${{ matrix.package }}'
-          $isVsBuildTools = $scriptRel -match 'vs-buildtools\.ps1$'
+      - name: Checkout Toolchains
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-          if ($isVsBuildTools) {
-            if (Test-Path $env:TLC_PKG_ROOT) { Remove-Item -Recurse -Force $env:TLC_PKG_ROOT }
-          } else {
-            if (Test-Path $env:TLC_PKG_ROOT) {
-              Get-ChildItem -LiteralPath $env:TLC_PKG_ROOT -Force |
-                Where-Object { $_.Name -ne 'cache' } |
-                Remove-Item -Recurse -Force
-            } else {
-              New-Item -ItemType Directory -Path $env:TLC_PKG_ROOT -Force | Out-Null
-            }
-            New-Item -ItemType Directory -Path (Join-Path $env:TLC_PKG_ROOT 'cache') -Force | Out-Null
-          }
+      - name: Checkout pinned Toolchain contract source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: allsagetech/toolchain
+          ref: 10342606bb137f6a9823a8bc8ca4f7f75a1a40d2
+          path: .ci/toolchain-contract
+          persist-credentials: false
 
-          if ($env:RUNNER_OS -eq 'Windows' -and (Test-Path $env:TLC_PKG_ROOT)) {
-            if (Test-Path 'C:\pkg') { Remove-Item -Recurse -Force 'C:\pkg' }
-            cmd /c "mklink /J C:\pkg `"$($env:TLC_PKG_ROOT)`"" | Out-Null
-          }
-
-          . .\src\main.ps1
-          Clear-TlcPackageScript
-
-          $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
-          Invoke-TlcScript $scriptPath
-
-          "script=$scriptRel" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-          if ($TlcPackageConfig.UpToDate) {
-            Write-Host "Skip publish: $($TlcPackageConfig.Name) up-to-date"
-            return
-          }
-
-          Invoke-DockerPush $TlcPackageConfig.Name $TlcPackageConfig.Version
-
-      - name: Trigger Toolchain contract tests
-        continue-on-error: true
-        if: ${{ github.ref == 'refs/heads/main' && steps.publish.outputs.up-to-date == 'False' }}
+      - name: Install pinned Toolchain module
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          TOOLCHAIN_CONTRACT_TOKEN: ${{ secrets.TOOLCHAIN_CONTRACT_TOKEN }}
-          TOOLCHAIN_REPO: allsagetech/toolchain
-          TLC_DOCKER_REPO: ${{ secrets.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+        run: .\scripts\install-toolchain.ps1 -Repo $env:TOOLCHAIN_REPO -Ref $env:TOOLCHAIN_REF -Token $env:GH_TOKEN
+
+      - name: Prepare Linux package mount
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PACKAGE_ROOT: ${{ matrix.publish_pkg_root }}
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$PACKAGE_ROOT"
+          sudo chown -R "$(id -u):$(id -g)" "$PACKAGE_ROOT"
+
+      - name: Prepare package storage
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $token = if ($env:TOOLCHAIN_CONTRACT_TOKEN) { $env:TOOLCHAIN_CONTRACT_TOKEN } else { $env:GH_TOKEN }
-          if (-not $token) {
-            Write-Host 'No GitHub token available; skipping contract dispatch.'
-            exit 0
+          $full = [IO.Path]::GetFullPath($env:TLC_PKG_ROOT)
+          if ($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/')) { throw "Unsafe package root: $full" }
+          if (Test-Path -LiteralPath $full) {
+            Get-ChildItem -LiteralPath $full -Force | Where-Object Name -ne 'cache' | Remove-Item -Recurse -Force
+          } else {
+            New-Item -ItemType Directory -Path $full -Force | Out-Null
+          }
+          New-Item -ItemType Directory -Path (Join-Path $full 'cache') -Force | Out-Null
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if (Test-Path -LiteralPath 'C:\pkg') { Remove-Item -LiteralPath 'C:\pkg' -Recurse -Force }
+            cmd /c "mklink /J C:\pkg `"$full`"" | Out-Null
           }
 
-          $name    = '${{ steps.publish.outputs.name }}'
-          $version = '${{ steps.publish.outputs.version }}'
-          $safeVer = $version.Replace('+','_')
-          $repo    = $env:TLC_DOCKER_REPO
-          $tag     = "${repo}:$name-$safeVer"
+      - name: Cache verified downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ matrix.publish_cache_path }}
+          key: release-cache-${{ runner.os }}-${{ hashFiles('src/util.ps1', 'src/pkgs/**') }}
+          restore-keys: release-cache-${{ runner.os }}-
 
-          $digRef = (& docker inspect --format '{{index .RepoDigests 0}}' $tag 2>$null).Trim()
-          if (-not $digRef) {
-            Write-Host "Could not determine RepoDigests for $tag; skipping contract dispatch."
-            exit 0
+      - name: Run package lifecycle
+        id: pkg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\src\main.ps1
+          Clear-TlcPackageScript
+          Invoke-TlcScript (Resolve-Path '${{ matrix.package }}').Path
+
+          "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Scan Windows package payload
+        if: runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        run: |
+          . .\src\main.ps1
+          Invoke-TlcPackageScan
+
+      - name: Start Docker daemon (Windows)
+        if: runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $service = Get-Service -Name docker -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -ne 'Running') { Start-Service docker }
+          if (-not $service) {
+            $dockerd = Get-Command dockerd -ErrorAction Stop
+            $dockerRoot = Join-Path $env:RUNNER_TEMP 'docker-data'
+            New-Item -ItemType Directory -Path $dockerRoot -Force | Out-Null
+            Start-Process -FilePath $dockerd.Source -ArgumentList @('--host','npipe:////./pipe/docker_engine','--data-root',$dockerRoot) -WindowStyle Hidden
+          }
+          for ($attempt = 1; $attempt -le 45; $attempt++) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) { docker version; exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          throw 'Docker daemon did not become ready.'
+
+      - name: Verify Docker daemon (Linux)
+        if: runner.os == 'Linux' && steps.pkg.outputs.up-to-date == 'False'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker version
+          docker info
+
+      - name: Build candidate OCI image once
+        id: image
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\src\main.ps1
+          Clear-TlcPackageScript
+          & (Resolve-Path '${{ matrix.package }}').Path
+          $TlcPackageConfig.Name = '${{ steps.pkg.outputs.name }}'
+          $TlcPackageConfig.Version = '${{ steps.pkg.outputs.version }}'
+
+          $dockerIgnore = Join-Path $env:TLC_PKG_ROOT '.dockerignore'
+          if (-not (Test-Path -LiteralPath $dockerIgnore)) {
+            @('cache/','_stage/','artifacts/','*.tmp') | Set-Content -LiteralPath $dockerIgnore -Encoding utf8
           }
 
-          $labelsJson = (& docker inspect --format '{{ json .Config.Labels }}' $tag 2>$null).Trim()
-          $labels = @{}
-          if ($labelsJson) {
-            try { $labels = $labelsJson | ConvertFrom-Json } catch { $labels = @{} }
+          $safeVersion = ([string]$TlcPackageConfig.Version).Replace('+','_')
+          $candidate = "toolchains-candidate:$($TlcPackageConfig.Name)-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $dockerfileName = if ($TlcPackageConfig.Dockerfile) { [string]$TlcPackageConfig.Dockerfile } else { $null }
+          Invoke-DockerBuild $candidate $TlcPackageConfig.Name $TlcPackageConfig.Version $dockerfileName
+          $imageId = (& docker image inspect --format '{{.Id}}' $candidate | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $imageId) { throw "Could not resolve image ID for $candidate" }
+
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          "image=$candidate" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "image-id=$imageId" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "Candidate image: $candidate ($imageId)"
+
+      - name: Generate SPDX SBOM from exact candidate image
+        if: steps.pkg.outputs.up-to-date == 'False'
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ steps.image.outputs.image }}
+          format: spdx-json
+          output-file: artifacts/${{ steps.pkg.outputs.name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Scan exact candidate image
+        if: steps.pkg.outputs.up-to-date == 'False'
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ steps.image.outputs.image }}
+          format: sarif
+          output: artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          timeout: 30m
+
+      - name: Upload scan evidence
+        if: always() && steps.pkg.outputs.up-to-date == 'False'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scan-${{ steps.pkg.outputs.name }}-${{ github.run_attempt }}
+          path: artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Contract-test exact candidate image with pinned Toolchain
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        run: |
+          .\.github\scripts\Test-LocalImageContract.ps1 `
+            -ImageRef '${{ steps.image.outputs.image }}' `
+            -ExpectedImageId '${{ steps.image.outputs.image-id }}' `
+            -PackageName '${{ steps.pkg.outputs.name }}' `
+            -PackageVersion '${{ steps.pkg.outputs.version }}' `
+            -PackageRoot $env:TLC_PKG_ROOT `
+            -ToolchainSource .\.ci\toolchain-contract
+
+      - name: Record build provenance predicate
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        run: |
+          $predicate = [ordered]@{
+            builder = @{ id = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" }
+            buildType = 'https://github.com/allsagetech/toolchains/.github/workflows/build-push.yml@v1'
+            invocation = @{
+              configSource = @{ uri = "git+https://github.com/$env:GITHUB_REPOSITORY@$env:GITHUB_SHA"; digest = @{ sha1 = $env:GITHUB_SHA } }
+              parameters = @{ package = '${{ matrix.package }}'; runner = '${{ join(matrix.publish_runs_on, ',') }}' }
+              environment = @{ runnerOS = $env:RUNNER_OS; runnerArch = $env:RUNNER_ARCH }
+            }
+            metadata = @{ buildInvocationId = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"; completeness = @{ parameters = $true; environment = $true; materials = $true }; reproducible = $false }
+            materials = @(@{ uri = "git+https://github.com/$env:GITHUB_REPOSITORY"; digest = @{ sha1 = $env:GITHUB_SHA } })
+            candidateImageId = '${{ steps.image.outputs.image-id }}'
+          }
+          $predicate | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json' -Encoding utf8
+
+      - name: Login to Docker Hub
+        if: steps.pkg.outputs.up-to-date == 'False'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true
+
+      - name: Install verified Cosign
+        if: steps.pkg.outputs.up-to-date == 'False'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+        with:
+          cosign-release: v2.6.0
+
+      - name: Publish tested image to a unique staging digest
+        id: publish
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $safeVersion = '${{ steps.pkg.outputs.version }}'.Replace('+','_')
+          $finalTag = "${env:TLC_DOCKER_REPO}:${{ steps.pkg.outputs.name }}-$safeVersion"
+          $stagingTag = "${env:TLC_DOCKER_REPO}:staging-${{ steps.pkg.outputs.name }}-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+          docker manifest inspect $finalTag *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Refusing to overwrite immutable package tag: $finalTag" }
+
+          docker tag '${{ steps.image.outputs.image }}' $stagingTag
+          $stagedId = (& docker image inspect --format '{{.Id}}' $stagingTag | Out-String).Trim()
+          if ($stagedId -cne '${{ steps.image.outputs.image-id }}') {
+            throw "Staging changed image identity: expected ${{ steps.image.outputs.image-id }}, got $stagedId"
           }
 
-          $specVersion = $labels.'io.allsagetech.toolchain.specVersion'
-          $tlcPath     = $labels.'io.allsagetech.toolchain.tlcPath'
-          $tlcSha256   = $labels.'io.allsagetech.toolchain.tlcSha256'
-
-          $digest = ($digRef -split '@',2)[1]
-
-          $payload = @{
-            dockerRepo      = $repo
-            packageName     = $name
-            packageVersion  = $version
-            tag             = "$name-$safeVer"
-            repoDigestRef   = $digRef
-            digest          = $digest
-            packageRef      = "$name@$digest"
-            specVersion     = $specVersion
-            tlcPath         = $tlcPath
-            tlcSha256       = $tlcSha256
-            sourceRepo      = $env:GITHUB_REPOSITORY
-            sourceRunId     = $env:GITHUB_RUN_ID
-            sourceSha       = $env:GITHUB_SHA
+          docker push $stagingTag
+          if ($LASTEXITCODE -ne 0) { throw "docker push failed for $stagingTag" }
+          $remoteManifest = (& docker manifest inspect --verbose $stagingTag | Out-String) | ConvertFrom-Json
+          $remoteDigest = [string]$remoteManifest.Descriptor.digest
+          if ($remoteDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Could not resolve published repository digest for $stagingTag"
           }
+          $repoDigest = "$env:TLC_DOCKER_REPO@$remoteDigest"
 
-          $headers = @{
-            'Authorization' = "Bearer $token"
-            'Accept'        = 'application/vnd.github+json'
-            'User-Agent'    = 'actions-toolchains'
-            'X-GitHub-Api-Version' = '2022-11-28'
+          "staging-tag=$stagingTag" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "final-tag=$finalTag" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "digest-ref=$repoDigest" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "digest=$(($repoDigest -split '@',2)[1])" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Sign and attest the published digest
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        env:
+          DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:DIGEST_REF) { throw 'Published digest reference is empty.' }
+          cosign sign --yes $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw 'cosign sign failed.' }
+          cosign attest --yes --type spdxjson --predicate 'artifacts/${{ steps.pkg.outputs.name }}.spdx.json' $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw 'cosign SBOM attestation failed.' }
+          cosign attest --yes --type slsaprovenance --predicate 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json' $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw 'cosign provenance attestation failed.' }
+
+      - name: Verify signature and attestations fail closed
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        env:
+          DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $identity = "https://github.com/$env:GITHUB_WORKFLOW_REF"
+          $issuer = 'https://token.actions.githubusercontent.com'
+          cosign verify --certificate-identity $identity --certificate-oidc-issuer $issuer $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw 'Published signature verification failed.' }
+          cosign verify-attestation --type spdxjson --certificate-identity $identity --certificate-oidc-issuer $issuer $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw 'Published SBOM attestation verification failed.' }
+          cosign verify-attestation --type slsaprovenance --certificate-identity $identity --certificate-oidc-issuer $issuer $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw 'Published provenance attestation verification failed.' }
+
+      - name: Promote signed digest to immutable version tag without rebuilding
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        env:
+          SIGNED_DIGEST: ${{ steps.publish.outputs.digest }}
+          FINAL_TAG: ${{ steps.publish.outputs.final-tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          docker manifest inspect $env:FINAL_TAG *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Refusing to overwrite immutable package tag: $env:FINAL_TAG" }
+
+          docker tag '${{ steps.image.outputs.image }}' $env:FINAL_TAG
+          $promotedId = (& docker image inspect --format '{{.Id}}' $env:FINAL_TAG | Out-String).Trim()
+          if ($promotedId -cne '${{ steps.image.outputs.image-id }}') {
+            throw "Promotion changed image identity: expected ${{ steps.image.outputs.image-id }}, got $promotedId"
           }
+          docker push $env:FINAL_TAG
+          if ($LASTEXITCODE -ne 0) { throw "docker push failed for $env:FINAL_TAG" }
 
-          $body = @{
-            event_type     = 'toolchains-built'
-            client_payload = $payload
-          } | ConvertTo-Json -Compress -Depth 10
+          $remoteManifest = (& docker manifest inspect --verbose $env:FINAL_TAG | Out-String) | ConvertFrom-Json
+          $finalDigest = [string]$remoteManifest.Descriptor.digest
+          if ($finalDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Could not resolve final manifest digest for $env:FINAL_TAG"
+          }
+          if ($finalDigest -cne $env:SIGNED_DIGEST) {
+            throw "Final tag digest '$finalDigest' differs from signed staging digest '$env:SIGNED_DIGEST'."
+          }
+          Write-Host "Promoted signed digest $finalDigest to $env:FINAL_TAG"
 
-          Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$env:TOOLCHAIN_REPO/dispatches" -Headers $headers -Body $body
+      - name: Upload release evidence
+        if: always() && steps.pkg.outputs.up-to-date == 'False'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-evidence-${{ steps.pkg.outputs.name }}-${{ github.run_attempt }}
+          path: |
+            artifacts/${{ steps.pkg.outputs.name }}.spdx.json
+            artifacts/${{ steps.pkg.outputs.name }}.provenance.json
+            artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
+          if-no-files-found: error
+          retention-days: 90

@@ -26,12 +26,12 @@ function global:Install-TlcPackage {
 	$AssetName = "doxygen-$Version.windows.x64.bin.zip"
 	$Params = @{
 		AssetName = $AssetName
-		AssetURL = "https://www.doxygen.nl/files/$AssetName"
+		AssetURL = "https://github.com/doxygen/doxygen/releases/download/$Tag/$AssetName"
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path '\pkg' -Recurse -Include 'doxygen.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'doxygen.exe' | Select-Object -First 1).DirectoryName
 		}
 	}
 }

@@ -36,10 +36,11 @@ function global:Install-TlcPackage {
     $AssetName = "helm-$Tag-windows-amd64.zip"
     $Download  = "https://get.helm.sh/$AssetName"
 
-    $ZipPath = Join-Path $InstallRoot $AssetName
+	$ZipPath = Join-Path $InstallRoot $AssetName
+	$ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri "$Download.sha256sum" -AssetName $AssetName
 
-    Write-Host "Downloading Helm $Tag from $Download"
-    Invoke-WebRequest -Uri $Download -OutFile $ZipPath
+	Write-Host "Downloading Helm $Tag from $Download"
+	Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath -ExpectedSha256 $ExpectedSha256
 
     if (-not (Test-Path $ZipPath)) {
         throw "Failed to download Helm archive from $Download"
