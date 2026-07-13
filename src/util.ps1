@@ -1124,6 +1124,63 @@ function Get-TlcPkgPath {
 	return (Join-Path $root $ChildPath.TrimStart('\', '/'))
 }
 
+function ConvertTo-TlcCanonicalPathList {
+	[CmdletBinding()]
+	param(
+		[AllowNull()]
+		[AllowEmptyString()]
+		[string]$Value,
+
+		[string]$ContainedRoot
+	)
+
+	if ($null -eq $Value) { return $null }
+
+	$rootPath = $null
+	$rootPrefix = $null
+	if (-not [string]::IsNullOrWhiteSpace($ContainedRoot)) {
+		$rootPath = [IO.Path]::GetFullPath($ContainedRoot).TrimEnd('\', '/')
+		$rootPrefix = $rootPath + [IO.Path]::DirectorySeparatorChar
+	}
+
+	$normalized = foreach ($entry in ($Value -split ';')) {
+		if ([string]::IsNullOrWhiteSpace($entry)) {
+			$entry
+			continue
+		}
+
+		$candidate = $entry.Trim()
+		if (-not [IO.Path]::IsPathRooted($candidate)) {
+			if ($candidate -match '(^|[\\/])\.\.([\\/]|$)') {
+				throw "Relative path-list entry contains parent traversal: $candidate"
+			}
+			$candidate
+			continue
+		}
+
+		try {
+			$fullPath = [IO.Path]::GetFullPath($candidate)
+		} catch {
+			throw "Could not canonicalize path-list entry '$candidate': $($_.Exception.Message)"
+		}
+
+		if ($rootPath) {
+			$candidateForComparison = $candidate.Replace([IO.Path]::AltDirectorySeparatorChar, [IO.Path]::DirectorySeparatorChar)
+			$startedInsideRoot = $candidateForComparison.Equals($rootPath, [StringComparison]::OrdinalIgnoreCase) -or
+				$candidateForComparison.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)
+			$staysInsideRoot = $fullPath.Equals($rootPath, [StringComparison]::OrdinalIgnoreCase) -or
+				$fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)
+			if ($startedInsideRoot -and -not $staysInsideRoot) {
+				throw "Path-list entry escapes its required root '$rootPath': $candidate"
+			}
+		}
+
+		$fullPath
+	}
+
+	return ($normalized -join ';')
+}
+
 function Get-TlcStagingPath {
 	param(
 		[string]$ChildPath

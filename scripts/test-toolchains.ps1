@@ -138,6 +138,16 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($doxygenPackageText -match 'github\.com/doxygen/doxygen/releases/download/\$Tag/\$AssetName') 'Doxygen does not use its official GitHub release asset with published SHA-256 metadata.'
 	$vsBuildToolsText = Get-Content -LiteralPath .\src\pkgs\vs-buildtools.ps1 -Raw
 	Assert-True ($vsBuildToolsText.Contains('${env:ProgramFiles(x86)}\Microsoft SDKs')) 'Visual Studio Build Tools omits an SDK directory referenced by its generated PATH contract.'
+	Assert-True ($vsBuildToolsText -match 'ConvertTo-TlcCanonicalPathList\s+-Value\s+\$value\s+-ContainedRoot') 'Visual Studio Build Tools does not canonicalize generated path-list variables before writing its package contract.'
+	if (Test-TlcHostIsWindows) {
+		$canonicalPathList = ConvertTo-TlcCanonicalPathList -Value 'D:\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\..\..\..\..\..\..\..\Windows Kits\10\bin\10.0.26100.0\\x64;C:\Windows\System32' -ContainedRoot 'D:\pkg'
+		Assert-True ($canonicalPathList -eq 'D:\pkg\Windows Kits\10\bin\10.0.26100.0\x64;C:\Windows\System32') 'Path-list canonicalization did not normalize the Visual Studio SDK path emitted by VsDevCmd.'
+		foreach ($unsafePath in @('D:\pkg\..\outside', 'D:/pkg/../outside', '..\outside', 'bin\..\..\outside')) {
+			$pathEscapeRejected = $false
+			try { ConvertTo-TlcCanonicalPathList -Value $unsafePath -ContainedRoot 'D:\pkg' | Out-Null } catch { $pathEscapeRejected = $true }
+			Assert-True $pathEscapeRejected "Path-list canonicalization accepted unsafe entry: $unsafePath"
+		}
+	}
 	$utilText = Get-Content -LiteralPath .\src\util.ps1 -Raw
 	Assert-True ($utilText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw

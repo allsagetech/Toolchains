@@ -122,6 +122,7 @@ function global:Install-TlcPackage {
         foreach ($arch in $msvc.Archs) {
             Write-Output "Evaluating variables for configuration $($msvc.name) on arch $arch"
             $vars = 'WindowsSdkBinPath', 'WindowsSdkVerBinPath', 'WindowsSDKVersion', 'VCToolsRedistDir', 'VSCMD_ARG_VCVARS_VER', 'UniversalCRTSdkDir', 'WindowsSdkDir', 'VCIDEInstallDir', 'VSCMD_ARG_HOST_ARCH', 'VSCMD_ARG_app_plat', 'VCToolsVersion', 'INCLUDE', 'EXTERNAL_INCLUDE', 'WindowsLibPath', 'VCToolsInstallDir', 'VCINSTALLDIR', 'VS170COMNTOOLS', 'LIBPATH', 'path', 'UCRTVersion', 'DevEnvDir', 'WindowsSDKLibVersion', 'LIB', 'VSCMD_VER', 'VSINSTALLDIR', 'VSCMD_ARG_TGT_ARCH', 'VisualStudioVersion'
+            $pathListVars = 'WindowsSdkBinPath', 'WindowsSdkVerBinPath', 'VCToolsRedistDir', 'UniversalCRTSdkDir', 'WindowsSdkDir', 'VCIDEInstallDir', 'INCLUDE', 'EXTERNAL_INCLUDE', 'WindowsLibPath', 'VCToolsInstallDir', 'VCINSTALLDIR', 'VS170COMNTOOLS', 'LIBPATH', 'path', 'DevEnvDir', 'LIB', 'VSINSTALLDIR'
             foreach ($v in $vars) {
                 Clear-Item "env:$v" -Force -ErrorAction SilentlyContinue
             }
@@ -145,8 +146,12 @@ function global:Install-TlcPackage {
 
             $map = @{}
             foreach ($var in $vars) {
-                $map.$var = Get-Item "env:$var" -ErrorAction SilentlyContinue |
+                $value = Get-Item "env:$var" -ErrorAction SilentlyContinue |
                     ForEach-Object { $_.value.Replace("${env:ProgramFiles(x86)}", (Get-TlcPkgRoot)) }
+                if ($null -ne $value -and $pathListVars -contains $var) {
+                    $value = ConvertTo-TlcCanonicalPathList -Value $value -ContainedRoot (Get-TlcPkgRoot)
+                }
+                $map.$var = $value
                 Write-Output "  $var=$($map.$var)"
             }
             $map.path = $map.path.Replace($path, '')
