@@ -1,0 +1,31 @@
+name: Package build bug
+description: Report a failing or incorrect package build
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      placeholder: node:24
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the workflow/job URL or local command and complete error.
+    validations:
+      required: true
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Upstream release and provenance
+      description: Link the publisher release, checksum, or signature metadata when relevant.
+  - type: dropdown
+    id: security
+    attributes:
+      label: Does this disclose a vulnerability?
+      options: ["No", "Yes — I will use SECURITY.md instead"]
+    validations:
+      required: true
