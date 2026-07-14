@@ -6,6 +6,7 @@ SPDX-License-Identifier: MPL-2.0
 #>
 
 . "$PSScriptRoot\util.ps1"
+. "$PSScriptRoot\model-catalog.ps1"
 
 $ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
@@ -86,6 +87,7 @@ function Test-TlcPackageScript {
 	if (-not $TlcPackageConfig.Name) {
 		Write-Error "toolchains: TlcPackageConfig missing name property"
 	}
+	Assert-TlcKindMarkerSafePackageName -Name ([string]$TlcPackageConfig.Name)
 	if ($TlcPackageConfig.Nonce -and (-not $TlcPackageConfig.Version)) {
 		Write-Error "toolchains: TlcPackageConfig missing version property"
 	}
