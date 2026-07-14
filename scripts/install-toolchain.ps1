@@ -8,7 +8,7 @@ param(
   [string]$Repo = $(if ($env:TOOLCHAIN_REPO) { $env:TOOLCHAIN_REPO } else { 'allsagetech/toolchain' }),
   # Keep the default immutable. Maintainers may explicitly override it with
   # -Ref or TOOLCHAIN_REF when testing another release or commit.
-  [string]$Ref  = $(if ($env:TOOLCHAIN_REF) { $env:TOOLCHAIN_REF } else { 'f6088e16872964cc8b5f4618a8e1bc0596822e32' }),
+  [string]$Ref  = $(if ($env:TOOLCHAIN_REF) { $env:TOOLCHAIN_REF } else { '581d176d85371bbbff80d10432ebf5ad29b20435' }),
   [string]$Token = $(if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { $null })
 )
 
@@ -55,7 +55,7 @@ $zip    = Join-Path $tempRoot "toolchain-$nonce.zip"
 $dest   = Join-Path $tempRoot "toolchain-src-$nonce"
 
 $headers = @{
-  "User-Agent" = "actions-toolchains"
+  "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   "Accept"     = "application/vnd.github+json"
   "X-GitHub-Api-Version" = "2022-11-28"
 }

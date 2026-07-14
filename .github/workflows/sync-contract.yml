@@ -1,0 +1,68 @@
+# <#
+# Toolchains
+# Copyright (c) 2026 AllSageTech
+# SPDX-License-Identifier: MPL-2.0
+# #>
+name: Sync Toolchain Package Contract
+
+on:
+  schedule:
+    - cron: '31 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-toolchain-package-contract
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download latest immutable Toolchain contract
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $download = Join-Path $env:RUNNER_TEMP 'toolchain-contract-download'
+          $source = Join-Path $env:RUNNER_TEMP 'toolchain-contract'
+          New-Item -ItemType Directory -Path $download,$source -Force | Out-Null
+          gh release download --repo allsagetech/Toolchain --pattern toolchain-package-spec-v1.zip --dir $download --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the latest Toolchain package contract release artifact.' }
+          Expand-Archive -LiteralPath (Join-Path $download 'toolchain-package-spec-v1.zip') -DestinationPath $source -Force
+          .\scripts\update-package-spec.ps1 -SourceRoot $source
+
+      - name: Open synchronization pull request
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (git status --porcelain -- schema)) {
+            Write-Host 'The vendored package contract is current.'
+            return
+          }
+          $version = (Get-Content -LiteralPath schema/PACKAGE_SPEC_VERSION -Raw).Trim()
+          $branch = "automation/package-spec-v$version"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B $branch
+          git add -- schema
+          git commit -m "Sync Toolchain package contract v$version"
+          git push --force-with-lease --set-upstream origin $branch
+          $existing = gh pr list --head $branch --state open --json url --jq '.[0].url'
+          if ($existing) {
+            Write-Host "Updated existing contract PR: $existing"
+          } else {
+            gh pr create --base main --head $branch --title "Sync Toolchain package contract v$version" --body "Updates the vendored package-definition schema and fixtures from the latest immutable Toolchain release artifact."
+          }

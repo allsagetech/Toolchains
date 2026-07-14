@@ -34,6 +34,37 @@ function Test-PowerShellSyntax {
 	Write-Host "Parsed $($files.Count) PowerShell scripts."
 }
 
+function Test-WebRequestUserAgent {
+	. .\src\main.ps1
+
+	$oldUserAgent = $env:TLC_USER_AGENT
+	try {
+		Remove-Item Env:TLC_USER_AGENT -ErrorAction SilentlyContinue
+		$defaultHeaders = Get-TlcRequestHeaders
+		Assert-True ([string]$defaultHeaders['User-Agent'] -match '^Mozilla/5\.0 .+ Chrome/[0-9]+') 'Default web requests do not use the browser-compatible User-Agent.'
+
+		$customHeaders = Get-TlcRequestHeaders -Headers @{ 'User-Agent' = 'custom-agent/1.0'; 'Accept' = 'application/json' }
+		Assert-True ([string]$customHeaders['User-Agent'] -eq 'custom-agent/1.0') 'A caller-supplied User-Agent was overwritten.'
+		Assert-True ([string]$customHeaders['Accept'] -eq 'application/json') 'Caller-supplied request headers were not preserved.'
+
+		$env:TLC_USER_AGENT = 'environment-agent/2.0'
+		$environmentHeaders = Get-TlcRequestHeaders
+		Assert-True ([string]$environmentHeaders['User-Agent'] -eq 'environment-agent/2.0') 'TLC_USER_AGENT did not override the default User-Agent.'
+	} finally {
+		$env:TLC_USER_AGENT = $oldUserAgent
+	}
+
+	$networkText = Get-Content -LiteralPath .\src\network.ps1 -Raw
+	Assert-True ($networkText -match 'registry-1\.docker\.io/v2/\$repositoryPath/tags/list') 'Toolchain tag discovery does not use the Docker Registry V2 tag-list route.'
+	Assert-True ($networkText -notmatch 'hub\.docker\.com/v2/repositories') 'Toolchain tag discovery still uses the legacy Docker Hub repository route.'
+
+	$directPackageRequests = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Where-Object {
+		(Get-Content -LiteralPath $_.FullName -Raw) -match '\bInvoke-(?:RestMethod|WebRequest)\b'
+	})
+	Assert-True ($directPackageRequests.Count -eq 0) "Package scripts bypass the shared HTTP helpers: $($directPackageRequests.FullName -join ', ')"
+	Write-Host 'Validated browser-compatible request headers and Docker Registry V2 endpoints.'
+}
+
 function Test-PackageScripts {
 	. .\src\main.ps1
 
@@ -57,6 +88,189 @@ function Test-PackageScripts {
 
 	Clear-TlcPackageScript
 	Write-Host "Validated $($packages.Count) package scripts."
+}
+
+function Test-ModelCategoryMarkers {
+	. .\src\main.ps1
+
+	$configs = @()
+	try {
+		foreach ($package in Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Sort-Object FullName) {
+			Clear-TlcPackageScript
+			& $package.FullName
+			Test-TlcPackageScript
+			$configs += ,[pscustomobject]@{
+				Name = [string]$TlcPackageConfig.Name
+				Tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
+			}
+		}
+	} finally {
+		Clear-TlcPackageScript
+	}
+
+	$modelPackages = @(Get-TlcModelCategoryPackages -PackageConfigs $configs)
+	$expectedPackages = @(
+		'openai-gpt-oss-20b',
+		'qwen2.5-0.5b-instruct',
+		'qwen2.5-coder-7b-instruct',
+		'qwen3-0.6b',
+		'smollm2-135m-instruct',
+		'smollm2-360m-instruct'
+	)
+	Assert-True ($modelPackages.Count -eq $expectedPackages.Count) "Expected $($expectedPackages.Count) model packages, got $($modelPackages.Count)."
+	Assert-True ((@($modelPackages.Package) -join ',') -eq ($expectedPackages -join ',')) 'Model category packages do not match explicit model tiers.'
+	foreach ($modelPackage in $modelPackages) {
+		Assert-True ($modelPackage.Tier -in @('model-small', 'model-large')) "Unexpected model package tier: $($modelPackage.Tier)"
+	}
+	Assert-True (-not (@($modelPackages.Package) -contains 'codex')) 'Tooling package codex was inferred to be a model by name.'
+	Assert-True (-not (@($modelPackages.Package) -contains 'lmstudio')) 'Tooling package lmstudio was inferred to be a model by name.'
+
+	$unsafeRejected = $false
+	try {
+		Get-TlcModelCategoryPackages -PackageConfigs @(@{ Name = 'bad--name'; Tier = 'model-small' }) | Out-Null
+	} catch {
+		$unsafeRejected = $true
+	}
+	Assert-True $unsafeRejected 'Package names containing the reserved category-marker separator were accepted.'
+	$leadingUnderscoreRejected = $false
+	try {
+		Get-TlcModelCategoryPackages -PackageConfigs @(@{ Name = '_hidden-model'; Tier = 'model-small' }) | Out-Null
+	} catch {
+		$leadingUnderscoreRejected = $true
+	}
+	Assert-True $leadingUnderscoreRejected 'Package name grammar is broader than the Toolchain marker parser.'
+
+	$deduplicated = @(Get-TlcModelCategoryPackages -PackageConfigs @(
+		@{ Name = 'same-model'; Tier = 'model-small' },
+		@{ Name = 'same-model'; Tier = 'model-small' }
+	))
+	Assert-True ($deduplicated.Count -eq 1) 'Duplicate identical model descriptors were not deduplicated.'
+
+	$generationTags = @(
+		'tlc-kind-model-v1-4-2--model-a',
+		'tlc-kind-model-v1-4-2--model-b',
+		'tlc-kind-model-v1-5-2--model-a',
+		'tlc-kind-model-v1-6-2--model-a',
+		'tlc-kind-model-v1-6-3--model-b',
+		'tlc-kind-model--legacy-model',
+		'ordinary-tool-9.0.0'
+	)
+	$generations = @(Get-TlcModelCategoryGenerations -RegistryTags $generationTags)
+	$generation4 = @($generations | Where-Object Generation -eq 4)
+	$generation5 = @($generations | Where-Object Generation -eq 5)
+	$generation6 = @($generations | Where-Object Generation -eq 6)
+	Assert-True ($generation4.Count -eq 1 -and $generation4[0].Complete) 'A complete model marker generation was rejected.'
+	Assert-True ($generation5.Count -eq 1 -and -not $generation5[0].Complete) 'A partially propagated generation was accepted.'
+	Assert-True ($generation6.Count -eq 1 -and -not $generation6[0].Complete) 'A conflicting-count generation was accepted.'
+
+	$noOpPlan = Get-TlcModelCategoryPublicationPlan -DesiredPackages @('model-b', 'model-a') -RegistryTags @(
+		'tlc-kind-model-v1-4-2--model-a',
+		'tlc-kind-model-v1-4-2--model-b'
+	)
+	Assert-True (-not $noOpPlan.NeedsPublication -and $noOpPlan.Generation -eq 4) 'Highest observed complete matching generation was not treated as a no-op.'
+	$supersedingPlan = Get-TlcModelCategoryPublicationPlan -DesiredPackages @('model-b', 'model-a') -RegistryTags $generationTags
+	Assert-True ($supersedingPlan.NeedsPublication -and $supersedingPlan.Generation -eq 7) 'A newer incomplete/conflicting generation was not superseded despite matching older complete state.'
+	$newPlan = Get-TlcModelCategoryPublicationPlan -DesiredPackages @('model-a', 'model-c') -RegistryTags $generationTags
+	Assert-True ($newPlan.NeedsPublication -and $newPlan.Generation -eq 7) 'New publication did not advance beyond every observed generation.'
+	Assert-True ((@($newPlan.MarkerTags) -join ',') -eq 'tlc-kind-model-v1-7-2--model-a,tlc-kind-model-v1-7-2--model-c') 'New generation marker tags are not canonical.'
+	$emptyPlan = Get-TlcModelCategoryPublicationPlan -DesiredPackages @() -RegistryTags $generationTags
+	Assert-True ((@($emptyPlan.MarkerTags) -join ',') -eq 'tlc-kind-model-v1-7-0--empty') 'Empty model set did not produce the count-zero sentinel.'
+
+	$normalized = @(Get-TlcModelCategoryGenerations -RegistryTags @(
+		'tlc-kind-model-v1-0008-02--model-a',
+		'tlc-kind-model-v1-8-2--model-b'
+	))
+	Assert-True ($normalized.Count -eq 1 -and $normalized[0].Generation -eq 8 -and $normalized[0].Complete) 'Equivalent UInt64/count spellings were not normalized into one complete generation.'
+	$caseConflict = @(Get-TlcModelCategoryGenerations -RegistryTags @(
+		'tlc-kind-model-v1-9-2--model-a',
+		'tlc-kind-model-v1-9-2--MODEL-A'
+	))
+	Assert-True ($caseConflict.Count -eq 1 -and -not $caseConflict[0].Complete) 'Case-conflicting package spellings formed a complete generation.'
+	Assert-True ($null -eq (ConvertFrom-TlcModelCategoryMarkerTag -Tag 'tlc-kind-model-v1-9-0--model-a')) 'A non-sentinel count-zero marker was accepted.'
+	Assert-True ($null -eq (ConvertFrom-TlcModelCategoryMarkerTag -Tag 'tlc-kind-model-v1-9-10001--model-a')) 'A marker count above the client limit was accepted.'
+
+	$planPath = Join-Path ([IO.Path]::GetTempPath()) "toolchains-model-plan-$([Guid]::NewGuid().ToString('n')).json"
+	try {
+		& .\scripts\export-model-category-marker-plan.ps1 -OutputPath $planPath -Repository 'allsagetech/toolchains'
+		$planDocument = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+		Assert-True ([int]$planDocument.schemaVersion -eq 1) 'Exported model marker plan has an unexpected schema version.'
+		Assert-True ((@($planDocument.desiredPackages) -join ',') -eq ($expectedPackages -join ',')) 'Exported model marker plan does not contain the tier-derived package set.'
+	} finally {
+		Remove-Item -LiteralPath $planPath -Force -ErrorAction SilentlyContinue
+	}
+
+	$publisherText = Get-Content -LiteralPath .\scripts\publish-model-category-markers.ps1 -Raw
+	$exporterText = Get-Content -LiteralPath .\scripts\export-model-category-marker-plan.ps1 -Raw
+	Assert-True ($publisherText -match "'buildx', 'imagetools', 'create'") 'Model marker publisher does not use docker buildx imagetools create.'
+	Assert-True ($publisherText -match "'--prefer-index=false'") 'Model marker publisher may wrap a source manifest instead of preserving its digest.'
+	Assert-True ($publisherText -match 'registry-1\.docker\.io/v2/\$repositoryPath/tags/list') 'Publisher does not use the Docker Registry V2 tag-list route.'
+	Assert-True ($publisherText -notmatch '(?i)\bDELETE\b|/manifests/') 'Publisher contains a destructive tag or manifest deletion path.'
+	Assert-True ($publisherText -notmatch 'src[/\\]main\.ps1|src[/\\]pkgs') 'Privileged publisher can execute package descriptors.'
+	Assert-True ($exporterText -match 'src[/\\]main\.ps1' -and $exporterText -match 'src[/\\]pkgs') 'Unprivileged plan exporter does not derive names from validated descriptors.'
+	Assert-True ($exporterText -match 'desiredPackages' -and $exporterText -notmatch 'SourceTag|digest') 'Plan artifact includes registry state instead of names only.'
+
+	# Dot-source only the helper definitions; executable publication is guarded.
+	. .\scripts\publish-model-category-markers.ps1
+	$staleDigest = 'sha256:' + ('a' * 64)
+	$expectedDigest = 'sha256:' + ('b' * 64)
+	$descriptorQueue = [Collections.Generic.Queue[object]]::new()
+	$descriptorQueue.Enqueue([pscustomobject]@{ Digest = $staleDigest })
+	$descriptorQueue.Enqueue([pscustomobject]@{ Digest = $expectedDigest })
+	$observedDescriptor = Wait-TlcRemoteManifestDigest -Reference 'repo:marker' -ExpectedDigest $expectedDigest -Attempts 3 `
+		-DescriptorReader { param($Reference) $descriptorQueue.Dequeue() } -SleepAction { param($Seconds) }
+	Assert-True ($observedDescriptor.Digest -eq $expectedDigest -and $descriptorQueue.Count -eq 0) 'Digest polling accepted stale-but-valid marker content.'
+
+	$snapshotQueue = [Collections.Generic.Queue[object]]::new()
+	$snapshotQueue.Enqueue([string[]]@('tag-a'))
+	$snapshotQueue.Enqueue([string[]]@('tag-a', 'tag-b'))
+	$snapshotQueue.Enqueue([string[]]@('tag-b', 'tag-a'))
+	$stableTags = @(Get-TlcStableDockerHubTags -RepositoryName 'owner/repo' -Attempts 3 `
+		-TagReader { param($Repo) @($snapshotQueue.Dequeue()) } -SleepAction { param($Seconds) })
+	Assert-True (($stableTags -join ',') -eq 'tag-a,tag-b' -and $snapshotQueue.Count -eq 0) 'Registry snapshot retry did not require two identical normalized listings.'
+
+	$propagationQueue = [Collections.Generic.Queue[object]]::new()
+	$propagationQueue.Enqueue([string[]]@('tlc-kind-model-v1-10-2--model-a'))
+	$propagationQueue.Enqueue([string[]]@('tlc-kind-model-v1-10-2--model-a', 'tlc-kind-model-v1-10-2--model-b'))
+	$completeState = Wait-TlcCompleteModelCategoryGeneration -RepositoryName 'owner/repo' -Generation 10 -DesiredPackages @('model-a', 'model-b') -Attempts 2 `
+		-TagReader { param($Repo) @($propagationQueue.Dequeue()) } -SleepAction { param($Seconds) }
+	Assert-True ($completeState.Complete -and $propagationQueue.Count -eq 0) 'Generation polling accepted incomplete propagation.'
+
+	$buildxCalls = [Collections.Generic.List[object]]::new()
+	$digestWaitCalls = [Collections.Generic.List[object]]::new()
+	$generationWaitCalls = [Collections.Generic.List[object]]::new()
+	$publishPlan = [pscustomobject]@{
+		Generation      = [UInt64]11
+		DesiredPackages = @('model-a')
+		MarkerTags      = @('tlc-kind-model-v1-11-1--model-a')
+	}
+	Publish-TlcModelCategoryGeneration -RepositoryName 'owner/repo' -PublicationPlan $publishPlan `
+		-Anchor ([pscustomobject]@{ Digest = $expectedDigest }) `
+		-BuildxInvoker { param([string[]]$CommandArguments) $buildxCalls.Add([string[]]@($CommandArguments)) } `
+		-DigestWaiter { param($MarkerReference, $Digest) $digestWaitCalls.Add([pscustomobject]@{ Reference = $MarkerReference; Digest = $Digest }) } `
+		-GenerationWaiter { param($Repo, $GenerationNumber, [string[]]$Packages) $generationWaitCalls.Add([pscustomobject]@{ Repository = $Repo; Generation = $GenerationNumber; Packages = @($Packages) }) }
+	$expectedArguments = @(
+		'buildx', 'imagetools', 'create', '--prefer-index=false', '--tag',
+		'owner/repo:tlc-kind-model-v1-11-1--model-a',
+		"owner/repo@$expectedDigest"
+	)
+	Assert-True ($buildxCalls.Count -eq 1 -and ((@($buildxCalls[0]) -join '|') -ceq ($expectedArguments -join '|'))) 'Marker publication did not use the exact digest-qualified imagetools argv.'
+	Assert-True ($digestWaitCalls.Count -eq 1 -and $digestWaitCalls[0].Reference -ceq 'owner/repo:tlc-kind-model-v1-11-1--model-a' -and $digestWaitCalls[0].Digest -ceq $expectedDigest) 'Published marker digest was not verified exactly.'
+	Assert-True ($generationWaitCalls.Count -eq 1 -and $generationWaitCalls[0].Generation -eq 11) 'Complete-generation readback was not requested after marker publication.'
+
+	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
+	Assert-True ($workflowText -match '(?m)^  model-category-marker-plan:') 'Release workflow does not define the unprivileged model marker plan job.'
+	Assert-True ($workflowText -match '(?m)^  model-category-markers:') 'Release workflow does not define the model category marker job.'
+	$planJobText = [regex]::Match($workflowText, '(?ms)^  model-category-marker-plan:.*?(?=^  model-category-markers:)').Value
+	$publisherJobText = [regex]::Match($workflowText, '(?ms)^  model-category-markers:.*\z').Value
+	Assert-True ($planJobText -match 'export-model-category-marker-plan\.ps1' -and $planJobText -match 'upload-artifact@') 'Plan job does not export and upload its names-only artifact.'
+	Assert-True ($planJobText -notmatch 'DOCKERHUB_|login-action@|environment:\s*package-release') 'Unprivileged plan job is exposed to release credentials.'
+	Assert-True ($planJobText -match "github\.ref == 'refs/heads/main'") 'Authoritative marker planning is not limited to main.'
+	Assert-True ($planJobText -match "\(needs\.release\.result == 'success' \|\| needs\.release\.result == 'skipped'\)") 'Marker planning can bypass release success/no-op gating.'
+	Assert-True ($publisherJobText -match 'download-artifact@' -and $publisherJobText -match 'login-action@' -and $publisherJobText -match 'publish-model-category-markers\.ps1') 'Privileged publisher job is missing its isolated artifact/login/publication sequence.'
+	Assert-True ($publisherJobText -match 'group: toolchains-model-category-markers-\$\{\{ github\.repository \}\}') 'Publisher lacks repository-wide marker concurrency.'
+	Assert-True ($publisherJobText -notmatch 'export-model-category-marker-plan\.ps1|src[/\\]pkgs') 'Privileged publisher job can regenerate descriptor state.'
+
+	Write-Host "Validated $($modelPackages.Count) explicit model packages and generational marker publication."
 }
 
 function Test-HuggingFaceHelpers {
@@ -99,7 +313,10 @@ function Test-ProductionReadinessPolicies {
 	. .\src\main.ps1
 
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
-	Assert-True ($installerText -match "f6088e16872964cc8b5f4618a8e1bc0596822e32") 'Toolchain installer default is not pinned to the reviewed immutable commit.'
+	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
+	$workflowRef = [regex]::Match($workflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
+	Assert-True $workflowRef.Success 'Package workflow does not pin Toolchain to an immutable commit.'
+	Assert-True ($installerText -match [regex]::Escape($workflowRef.Groups[1].Value)) 'Toolchain installer default does not match the workflow immutable commit.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
 
 	$hardCodedRoots = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Select-String -Pattern '(?i)(?<![A-Za-z0-9_])\\{1,2}pkg(?:[\\/]|[''\"])')
@@ -155,12 +372,17 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($workflowText -match 'Where-Object \{ \[bool\]\$_\.verified_downloads -and \[bool\]\$_\.publish_eligible \}') 'Workflow matrices do not exclude unverified or quarantined packages.'
 	Assert-True (([regex]::Matches($workflowText, 'GH_TOKEN:\s+\$\{\{ github\.token \}\}')).Count -ge 4) 'Parallel build jobs do not authenticate GitHub API requests.'
 	Assert-True ($workflowText -match 'RUNNER_OS -eq ''Linux''[\s\S]+Get-ChildItem -LiteralPath \$full -Force \| Remove-Item') 'Linux package cleanup still removes the protected mount root.'
+	Assert-True ($workflowText -match 'scanner-smoke:') 'Publication does not validate scanner bootstrap before starting the package matrix.'
+	Assert-True ($workflowText -match 'Enforce supply-chain evidence gate') 'Publication does not distinguish scanner infrastructure failures from scan evidence.'
+	Assert-True ($workflowText -match 'package-health-summary:') 'Publication does not produce a consolidated package-health artifact.'
+	$familyText = Get-Content -LiteralPath .\src\package-families.ps1 -Raw
+	Assert-True ($familyText -match 'Not Found\|no upstream hash') 'Shared Adoptium package logic does not skip unavailable optional x86 assets under strict verification.'
 	foreach ($optionalX86Script in @(
 		'.\src\pkgs\jdk\jdk8.ps1', '.\src\pkgs\jdk\jdk11.ps1', '.\src\pkgs\jdk\jdk17.ps1',
 		'.\src\pkgs\jre\jre8.ps1', '.\src\pkgs\jre\jre11.ps1', '.\src\pkgs\jre\jre17.ps1'
 	)) {
 		$optionalX86Text = Get-Content -LiteralPath $optionalX86Script -Raw
-		Assert-True ($optionalX86Text -match 'Not Found\|no upstream hash') "$optionalX86Script does not skip an unavailable optional x86 artifact under strict verification."
+		Assert-True ($optionalX86Text -match 'Initialize-TlcAdoptiumPackage.+-IncludeX86') "$optionalX86Script does not opt in to shared optional x86 handling."
 	}
 	Clear-TlcPackageScript
 
@@ -220,6 +442,7 @@ function Test-AtomicVerifiedDownloads {
 	$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("toolchains-download-test-" + [Guid]::NewGuid().ToString('n'))
 	$oldCacheRoot = $env:TLC_CACHE_ROOT
 	$oldRequireVerified = $env:TLC_REQUIRE_VERIFIED_DOWNLOADS
+	$oldUserAgent = $env:TLC_USER_AGENT
 	$sourcePath = Join-Path $tempRoot 'source.bin'
 	$destination = Join-Path $tempRoot 'destination.bin'
 	$global:TlcTestDownloadCalls = 0
@@ -229,11 +452,13 @@ function Test-AtomicVerifiedDownloads {
 		$expected = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePath).Hash.ToLowerInvariant()
 		$env:TLC_CACHE_ROOT = Join-Path $tempRoot 'cache'
 		$env:TLC_REQUIRE_VERIFIED_DOWNLOADS = '1'
+		Remove-Item Env:TLC_USER_AGENT -ErrorAction SilentlyContinue
 
 		function global:Invoke-WebRequest {
 			[CmdletBinding()]
 			param([string]$Uri, [string]$OutFile, [hashtable]$Headers, [int]$TimeoutSec, [switch]$UseBasicParsing)
 			$global:TlcTestDownloadCalls++
+			Assert-True ([string]$Headers['User-Agent'] -match '^Mozilla/5\.0 .+ Chrome/[0-9]+') 'Invoke-TlcWebRequest did not pass the default browser-compatible User-Agent.'
 			Copy-Item -LiteralPath $sourcePath -Destination $OutFile -Force
 			return [pscustomobject]@{ StatusCode = 200; Content = '' }
 		}
@@ -271,6 +496,7 @@ function Test-AtomicVerifiedDownloads {
 		Remove-Variable TlcTestDownloadCalls -Scope Global -Force -ErrorAction SilentlyContinue
 		$env:TLC_CACHE_ROOT = $oldCacheRoot
 		$env:TLC_REQUIRE_VERIFIED_DOWNLOADS = $oldRequireVerified
+		$env:TLC_USER_AGENT = $oldUserAgent
 		Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 	}
 
@@ -393,11 +619,29 @@ function Test-HuggingFaceLayeredDockerfile {
 	}
 }
 
+function Test-UpstreamMetadataParsers {
+	. .\src\main.ps1
+	$mavenMetadata = Get-Content -LiteralPath .\fixtures\upstream\maven-metadata.xml -Raw
+	(Get-TlcMavenReleaseVersion -Metadata $mavenMetadata).ToString() | ForEach-Object {
+		Assert-True ($_ -eq '3.9.12') 'Maven metadata fixture did not select the declared release version.'
+	}
+
+	$vsHistory = Get-Content -LiteralPath .\fixtures\upstream\vs-release-history.html -Raw
+	$latest = Get-TlcVisualStudioBuildToolsRelease -Content $vsHistory
+	Assert-True ($latest.Version.ToString() -eq '17.12.2') 'Visual Studio release fixture did not select the latest LTSC version.'
+	$requested = Get-TlcVisualStudioBuildToolsRelease -Content $vsHistory -VersionWanted ([TlcSemanticVersion]::new('17.10.4'))
+	Assert-True ($requested.URI -eq 'https://example.invalid/17.10/vs_BuildTools.exe') 'Visual Studio release fixture did not select an explicitly requested LTSC version.'
+	Write-Host 'Validated machine-readable and fixture-backed upstream metadata parsers.'
+}
+
 Test-PowerShellSyntax
+Test-WebRequestUserAgent
 Test-PackageScripts
+Test-ModelCategoryMarkers
 & .\scripts\test-package-spec.ps1
 Test-HuggingFaceHelpers
 Test-HuggingFaceLayeredDockerfile
+Test-UpstreamMetadataParsers
 Test-WorkflowRunnerDefaults
 Test-ProductionReadinessPolicies
 Test-AtomicVerifiedDownloads

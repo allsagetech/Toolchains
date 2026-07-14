@@ -63,10 +63,9 @@ function global:Test-TlcPackageInstall {
   if ($scriptsDir) { $env:PATH = "$scriptsDir;$env:PATH" }
 
   $zip = Join-Path $env:TEMP "cmake-converter-test.zip"
-  Invoke-WebRequest "https://github.com/MicrosoftDocs/visualstudio-docs/archive/refs/heads/main.zip" `
+  Invoke-TlcWebRequest -Uri "https://github.com/MicrosoftDocs/visualstudio-docs/archive/refs/heads/main.zip" `
     -OutFile $zip `
     -Headers @{
-      "User-Agent" = "actions-toolchains"
       "Accept"     = "application/octet-stream"
     }
 

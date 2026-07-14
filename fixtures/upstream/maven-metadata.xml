@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>org.apache.maven</groupId>
+  <artifactId>apache-maven</artifactId>
+  <versioning><latest>3.9.99</latest><release>3.9.12</release></versioning>
+</metadata>

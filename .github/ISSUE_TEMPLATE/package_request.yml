@@ -1,0 +1,31 @@
+name: Package request
+description: Request a new tool or model package
+title: "[Package]: "
+labels: [enhancement, package]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Package name
+    validations:
+      required: true
+  - type: input
+    id: upstream
+    attributes:
+      label: Official upstream URL
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Publisher verification metadata
+      description: Link official checksums, signatures, or release API metadata.
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Package tier
+      options: [tooling, model-small, model-large]
+    validations:
+      required: true

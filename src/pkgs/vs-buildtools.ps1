@@ -19,7 +19,6 @@ $global:MSVCVersions = @(
 function global:Install-TlcPackage {
     $OldPath    = $env:Path
     $VSInfo     = $null
-    $FoundAny   = $false
 
     $VersionWanted = if ($env:GITHUB_REF_NAME -match '-([0-9]+\.[0-9]+\.[0-9]+)$') {
         [TlcSemanticVersion]::new($Matches[1])
@@ -27,30 +26,8 @@ function global:Install-TlcPackage {
         $null
     }
 
-    (Invoke-WebRequest 'https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history').Content -split '</tr>' |
-        ForEach-Object {
-            if ($_ -match '(?s)<tr\b.+\bLTSC\b.+>([0-9]+\.[0-9]+\.[0-9]+)</.+ href="([^"]+/vs_BuildTools\.exe)"') {
-                $FoundAny   = $true
-                $RowVersion = [TlcSemanticVersion]::new($Matches[1])
-                $RowUri     = $Matches[2]
-
-                if ($null -ne $VersionWanted) {
-                    if ($VersionWanted.CompareTo($RowVersion) -eq 0) {
-                        $VSInfo = @{ Version = $RowVersion; URI = $RowUri }
-                    }
-                }
-                else {
-                    if (-not $VSInfo -or $RowVersion.LaterThan($VSInfo.Version)) {
-                        $VSInfo = @{ Version = $RowVersion; URI = $RowUri }
-                    }
-                }
-            }
-        }
-
-    if (-not $FoundAny) {
-        Write-Error 'No Visual Studio Build Tools LTSC releases found on website'
-        return
-    }
+    $releaseHistory = (Invoke-TlcWebRequest -Uri 'https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history').Content
+    $VSInfo = Get-TlcVisualStudioBuildToolsRelease -Content $releaseHistory -VersionWanted $VersionWanted
 
     if (-not $VSInfo) {
         if ($VersionWanted) {
