@@ -791,3 +791,72 @@ jobs:
             artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
           if-no-files-found: error
           retention-days: 90
+
+  model-category-marker-plan:
+    name: Plan model category markers
+    needs: [init, validate, release]
+    if: ${{ always() && needs.init.result == 'success' && needs.validate.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Export desired model package names
+        shell: pwsh
+        run: |
+          $planDirectory = Join-Path $env:RUNNER_TEMP 'model-category-marker-plan'
+          New-Item -ItemType Directory -Path $planDirectory -Force | Out-Null
+          .\scripts\export-model-category-marker-plan.ps1 `
+            -OutputPath (Join-Path $planDirectory 'model-category-marker-plan.json') `
+            -Repository $env:TLC_DOCKER_REPO
+
+      - name: Upload model category marker plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-category-marker-plan
+          path: ${{ runner.temp }}/model-category-marker-plan/model-category-marker-plan.json
+          if-no-files-found: error
+          retention-days: 1
+
+  model-category-markers:
+    name: Publish model category markers
+    needs: [model-category-marker-plan]
+    if: ${{ needs.model-category-marker-plan.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: package-release
+    concurrency:
+      group: toolchains-model-category-markers-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download model category marker plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: model-category-marker-plan
+          path: ${{ runner.temp }}/model-category-marker-plan
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true
+
+      - name: Publish complete model category generation
+        shell: pwsh
+        run: |
+          .\scripts\publish-model-category-markers.ps1 `
+            -PlanPath (Join-Path $env:RUNNER_TEMP 'model-category-marker-plan/model-category-marker-plan.json') `
+            -Repository $env:TLC_DOCKER_REPO
