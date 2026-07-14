@@ -18,7 +18,7 @@ Package scripts must not build, push, sign, or mutate registry tags. The workflo
 7. Write a schema-conforming `.tlc` definition.
 8. Test every named configuration and verify the reported tool version.
 
-Use `RunsOn` and `PublishRunsOn` only when platform requirements differ from the defaults. Use `Tier` to classify `tooling`, `model-small`, or `model-large` packages. Model packages must use an Ubuntu runner.
+Use `RunsOn` and `PublishRunsOn` only when platform requirements differ from the defaults. Use `Tier` to classify `tooling`, `model-small`, or `model-large` packages. Model packages must use an Ubuntu runner. The protected release workflow derives model catalog markers only from the explicit `model-small` and `model-large` tiers; package-name heuristics are not used. Package names cannot contain `--`, which is reserved as the category-marker separator.
 
 If an upstream publisher offers neither a cryptographic digest nor a supported signature, set `TlcPackageConfig.VerifiedDownloads = $false` and provide `UnverifiedDownloadReason`. This is a quarantine marker, not an exception: strict smoke and release jobs refuse to build or publish the package until independent provenance is available. Do not disable strict download mode to release a quarantined package.
 

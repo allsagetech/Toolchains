@@ -24,6 +24,10 @@ Model packages seed Hugging Face cache content under `cache/hf-cache` and write 
 
 Package scripts can declare `TlcPackageConfig.Tier` as `tooling`, `model-small`, or `model-large`. Pull requests validate all descriptors and run secret-free Windows/Linux smoke builds for representative and changed publish-eligible packages. Pushes to `main` include tooling plus small models; schedules and manual workflow runs include large models, with large models isolated on the self-hosted `toolchains-large` runner. Pull requests never execute large-model package code on self-hosted runners.
 
+After a successful or no-op release on `main`, an unprivileged job derives model package names from the explicit model tiers and passes a names-only plan to a fresh publisher job. The publisher writes a complete generation using `tlc-kind-model-v1-<generation>-<count>--<package>` tags (or `tlc-kind-model-v1-<generation>-0--empty`). Toolchain uses the highest complete generation, so partial propagation is ignored and older generations can remain safely in place. Package names may not contain the reserved `--` separator.
+
+Category markers are untrusted discovery hints, not authorization or integrity evidence. Every marker in a generation can reuse one existing manifest digest because only its tag name carries classification. Consumers must still verify the selected package digest, signature, and provenance through the normal pull path.
+
 Default Windows package install/test and publish jobs run on GitHub-hosted `windows-2022`.
 
 Use the helper script on a Linux host/runner:
@@ -58,7 +62,9 @@ pwsh -NoLogo -NoProfile -File ./scripts/test-toolchains.ps1
 
 Package authors must follow the lifecycle, checksum, package-root, and configuration rules in [`doc/package-authoring.md`](doc/package-authoring.md). The immutable build/scan/contract/sign/promotion sequence is documented in [`doc/release-process.md`](doc/release-process.md), and self-hosted runners should follow [`doc/cache-migration.md`](doc/cache-migration.md).
 
-The package-definition schema and fixtures in `schema/` are a vendored copy of the versioned Toolchain contract. Validate them with `scripts/test-package-spec.ps1`; update them from a canonical checkout with `scripts/update-package-spec.ps1`.
+The repository and workflow boundaries are summarized in [`doc/architecture.md`](doc/architecture.md). Every publication run uploads `package-health.json` and writes a per-package Actions summary so scanner infrastructure failures, vulnerability findings, and package lifecycle failures can be distinguished without opening every matrix job.
+
+The package-definition schema and fixtures in `schema/` are a vendored copy of the versioned Toolchain contract. Validate them with `scripts/test-package-spec.ps1`; update them from a canonical checkout with `scripts/update-package-spec.ps1`. A scheduled workflow downloads the latest immutable Toolchain contract artifact and opens an automated synchronization PR when those files change.
 
 See [`SECURITY.md`](SECURITY.md) for vulnerability reporting and release supply-chain requirements, and [`CHANGELOG.md`](CHANGELOG.md) for pending user-visible changes.
 
