@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add integrity-checked Windows and Linux packages for kind, k3d, and kubectl to support Toolchain-managed local Kubernetes clusters.
+
 ### Security
 
 - Verify downloaded package inputs and cache hits before execution.
