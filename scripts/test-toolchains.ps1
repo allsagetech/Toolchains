@@ -439,6 +439,9 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($stagingCleanupText -notmatch '/manifests/') 'Staging cleanup can delete a shared registry manifest instead of one tag.'
 	Assert-True ($stagingCleanupText -match "'User-Agent'") 'Docker Hub staging cleanup does not send an explicit browser User-Agent.'
 	Assert-True (Test-Path -LiteralPath .\.github\workflows\cleanup-staging-tags.yml -PathType Leaf) 'Orphaned staging tags have no scheduled cleanup workflow.'
+	$stagingCleanupWorkflowText = Get-Content -LiteralPath .\.github\workflows\cleanup-staging-tags.yml -Raw
+	Assert-True ($stagingCleanupWorkflowText -match 'environment:\s+package-release') 'Scheduled staging cleanup cannot access package-release environment secrets.'
+	Assert-True ($stagingCleanupWorkflowText -match 'secrets\.DOCKERHUB_USERNAME' -and $stagingCleanupWorkflowText -match 'secrets\.DOCKERHUB_TOKEN') 'Scheduled staging cleanup does not receive the Docker Hub environment secrets.'
 	$cosignInstallerText = Get-Content -LiteralPath .\.github\scripts\Install-VerifiedCosign.ps1 -Raw
 	Assert-True ($cosignInstallerText -match '\$version = ''v2\.6\.0''') 'Cosign bootstrap version is not pinned.'
 	Assert-True ($cosignInstallerText -match '7beb4dd1e19a72c328bbf7c0d7342d744edbf5cbb082f227b2b76e04a21c16ef') 'Cosign Windows asset digest is not pinned.'
