@@ -5,6 +5,7 @@
 ### Added
 
 - Add integrity-checked Windows and Linux packages for kind, k3d, and kubectl to support Toolchain-managed local Kubernetes clusters.
+- Add a Windows Docker Desktop bootstrap package that discovers Docker's current release, downloads it directly from Docker, verifies its SHA-256 and Authenticode publisher, and keeps license acceptance explicit.
 
 ### Security
 

@@ -44,6 +44,17 @@ provider executable is not already on `PATH`. Kubectl remains opt-in with
 Kubernetes node container images are intentionally not bundled into these
 packages.
 
+On Windows, `toolchain load docker-desktop` adds the
+`docker-desktop-install` bootstrap command. Run it with no arguments for
+Docker's per-user interactive installation, or use
+`docker-desktop-install -Quiet -AcceptLicense` only after reviewing Docker's
+Desktop [license terms](https://docs.docker.com/subscription/desktop-license/).
+The Toolchains image does not redistribute the roughly 600 MB Docker
+Desktop installer: the command downloads the selected release directly from
+Docker and verifies its published SHA-256 and Docker Inc. Authenticode
+signature before execution. Use `-AllUsers` to request the elevated all-user
+installation or `-DownloadOnly` to verify the installer without running it.
+
 Use the helper script on a Linux host/runner:
 
 ```powershell

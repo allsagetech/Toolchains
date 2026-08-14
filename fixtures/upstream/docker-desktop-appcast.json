@@ -1,0 +1,37 @@
+{
+  "Version": "1.0",
+  "Items": [
+    {
+      "Date": "2026-08-03T08:15:00Z",
+      "AppVersion": "4.85.0",
+      "BuildNumber": "235549",
+      "Artifacts": [
+        {
+          "URL": "https://desktop.docker.com/win/main/amd64/235549/Docker Desktop Installer.exe",
+          "Length": "627100000",
+          "Type": "exe",
+          "Checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "Date": "2026-08-10T09:13:21Z",
+      "AppVersion": "4.86.0",
+      "BuildNumber": "236216",
+      "Artifacts": [
+        {
+          "URL": "https://desktop.docker.com/win/main/amd64/236216/Docker Desktop Installer.exe",
+          "Length": "628979632",
+          "Type": "exe",
+          "Checksum": "820438e75c16e44b393079154bea7d27958a15845c23a635b1a1f6f586b2ed44"
+        },
+        {
+          "URL": "https://desktop.docker.com/win/main/amd64/236216/DockerDesktop.msi",
+          "Length": "1006649344",
+          "Type": "msi",
+          "Checksum": "b80a2e8d0b33b752b74f31c82019f62bb0335e6960722af934a7186a0e921682"
+        }
+      ]
+    }
+  ]
+}

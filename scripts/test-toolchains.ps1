@@ -333,6 +333,13 @@ function Test-ProductionReadinessPolicies {
 	$dockerPackageText = Get-Content -LiteralPath .\src\pkgs\docker.ps1 -Raw
 	Assert-True ($dockerPackageText -notmatch '\bInvoke-DockerPush\b') 'Docker package installer still owns image publication.'
 	Assert-True ($dockerPackageText -notmatch 'UpToDate\s*=\s*\$true') 'Docker package installer still unconditionally suppresses lifecycle testing/publication.'
+	$dockerDesktopPackageText = Get-Content -LiteralPath .\src\pkgs\docker-desktop.ps1 -Raw
+	$dockerDesktopInstallerText = Get-Content -LiteralPath .\src\assets\docker-desktop\docker-desktop-install.ps1 -Raw
+	Assert-True ($dockerDesktopPackageText -match 'Get-TlcDockerDesktopRelease') 'Docker Desktop package does not use the official appcast metadata parser.'
+	Assert-True ($dockerDesktopInstallerText -match 'Get-FileHash.+SHA256') 'Docker Desktop bootstrap does not verify the installer SHA-256.'
+	Assert-True ($dockerDesktopInstallerText -match 'Get-AuthenticodeSignature') 'Docker Desktop bootstrap does not verify the installer Authenticode signature.'
+	Assert-True ($dockerDesktopInstallerText -match "arguments \+= '--user'") 'Docker Desktop bootstrap does not default to a per-user installation.'
+	Assert-True ($dockerDesktopInstallerText -notmatch "arguments = @\('install',\s*'--accept-license'") 'Docker Desktop bootstrap accepts the license without explicit user consent.'
 	$pushText = (Get-Command Invoke-DockerPush).Definition
 	Assert-True ($pushText -match 'existing signature state was not proven') 'Requested signing can silently skip an existing image tag.'
 
@@ -631,6 +638,18 @@ function Test-UpstreamMetadataParsers {
 	Assert-True ($latest.Version.ToString() -eq '17.12.2') 'Visual Studio release fixture did not select the latest LTSC version.'
 	$requested = Get-TlcVisualStudioBuildToolsRelease -Content $vsHistory -VersionWanted ([TlcSemanticVersion]::new('17.10.4'))
 	Assert-True ($requested.URI -eq 'https://example.invalid/17.10/vs_BuildTools.exe') 'Visual Studio release fixture did not select an explicitly requested LTSC version.'
+
+	$dockerDesktopAppcast = Get-Content -LiteralPath .\fixtures\upstream\docker-desktop-appcast.json -Raw | ConvertFrom-Json
+	$dockerDesktop = Get-TlcDockerDesktopRelease -Metadata $dockerDesktopAppcast
+	Assert-True ($dockerDesktop.VersionText -eq '4.86.0') 'Docker Desktop appcast fixture did not select the latest release.'
+	Assert-True ($dockerDesktop.BuildNumber -eq '236216') 'Docker Desktop appcast fixture did not preserve the selected build number.'
+	Assert-True ($dockerDesktop.URL -eq 'https://desktop.docker.com/win/main/amd64/236216/Docker%20Desktop%20Installer.exe') 'Docker Desktop appcast fixture did not select the Windows x64 EXE.'
+	Assert-True ($dockerDesktop.Sha256 -eq '820438e75c16e44b393079154bea7d27958a15845c23a635b1a1f6f586b2ed44') 'Docker Desktop appcast fixture did not preserve the publisher SHA-256.'
+	$invalidDockerDesktopAppcast = Get-Content -LiteralPath .\fixtures\upstream\docker-desktop-appcast.json -Raw | ConvertFrom-Json
+	foreach ($item in $invalidDockerDesktopAppcast.Items) { $item.Artifacts[0].URL = 'https://example.invalid/Docker Desktop Installer.exe' }
+	$offDomainRejected = $false
+	try { Get-TlcDockerDesktopRelease -Metadata $invalidDockerDesktopAppcast | Out-Null } catch { $offDomainRejected = $true }
+	Assert-True $offDomainRejected 'Docker Desktop appcast parser accepted an installer from outside Docker''s pinned download origin.'
 	Write-Host 'Validated machine-readable and fixture-backed upstream metadata parsers.'
 }
 
