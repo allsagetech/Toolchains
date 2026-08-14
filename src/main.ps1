@@ -99,6 +99,25 @@ function Test-TlcPackageScript {
 	if ($TlcPackageConfig.ContainsKey('VerifiedDownloads') -and -not [bool]$TlcPackageConfig.VerifiedDownloads -and [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) {
 		Write-Error "toolchains: $($TlcPackageConfig.Name) marks downloads unverified without an UnverifiedDownloadReason"
 	}
+	if ($TlcPackageConfig.Vex) {
+		$vexRelativePath = [string]$TlcPackageConfig.Vex
+		if ([IO.Path]::IsPathRooted($vexRelativePath)) {
+			Write-Error "toolchains: VEX path must be repository-relative: $vexRelativePath"
+		}
+		$repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+		$vexRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot '.github/vex')).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+		$vexPath = [IO.Path]::GetFullPath((Join-Path $repositoryRoot $vexRelativePath))
+		if (-not $vexPath.StartsWith($vexRoot, [StringComparison]::OrdinalIgnoreCase)) {
+			Write-Error "toolchains: VEX path must be contained by .github/vex: $vexRelativePath"
+		}
+		if (-not (Test-Path -LiteralPath $vexPath -PathType Leaf)) {
+			Write-Error "toolchains: VEX document does not exist: $vexRelativePath"
+		}
+		$vexDocument = Get-Content -LiteralPath $vexPath -Raw | ConvertFrom-Json
+		if ([string]$vexDocument.'@context' -ne 'https://openvex.dev/ns/v0.2.0' -or @($vexDocument.statements).Count -eq 0) {
+			Write-Error "toolchains: VEX document is not a non-empty OpenVEX 0.2 document: $vexRelativePath"
+		}
+	}
 }
 
 function Invoke-TlcPackageScan {

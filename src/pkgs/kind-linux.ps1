@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 $global:TlcPackageConfig = @{
 	Name = 'kind-linux'
 	RunsOn = 'ubuntu-22.04'
+	GoToolchain = 'go1.26.6'
 }
 
 function global:Install-TlcPackage {
@@ -20,14 +21,34 @@ function global:Install-TlcPackage {
 	$TlcPackageConfig.UpToDate = -not $asset.Version.LaterThan($TlcPackageConfig.Latest)
 	if ($TlcPackageConfig.UpToDate) { return }
 
-	New-Item -Path (Get-TlcPkgRoot) -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-	$expectedSha256 = if ($asset.ExpectedSha256) {
-		$asset.ExpectedSha256
-	} else {
-		Get-TlcRemoteSha256 -ChecksumUri "$($asset.URL).sha256sum" -AssetName $asset.Name -Headers (Get-TlcGitHubHeaders)
+	$pkgRoot = Get-TlcPkgRoot
+	New-Item -Path $pkgRoot -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+	$previous = @{
+		CGO_ENABLED = $env:CGO_ENABLED
+		GOBIN = $env:GOBIN
+		GOFLAGS = $env:GOFLAGS
+		GOSUMDB = $env:GOSUMDB
+		GOTOOLCHAIN = $env:GOTOOLCHAIN
+		GOWORK = $env:GOWORK
+	}
+	try {
+		$env:CGO_ENABLED = '0'
+		$env:GOBIN = $pkgRoot
+		$env:GOFLAGS = $null
+		$env:GOSUMDB = 'sum.golang.org'
+		$env:GOTOOLCHAIN = $TlcPackageConfig.GoToolchain
+		$env:GOWORK = 'off'
+		$go = Get-Command go -CommandType Application -ErrorAction Stop
+		& $go.Source install "sigs.k8s.io/kind@v$($TlcPackageConfig.Version)"
+		if ($LASTEXITCODE -ne 0) { throw "verified kind source build failed with exit code $LASTEXITCODE" }
+	} finally {
+		foreach ($name in $previous.Keys) {
+			if ($null -eq $previous[$name]) { Remove-Item -LiteralPath "env:$name" -ErrorAction SilentlyContinue }
+			else { Set-Item -LiteralPath "env:$name" -Value $previous[$name] }
+		}
 	}
 	$executable = Get-TlcPkgPath 'kind'
-	Invoke-TlcWebRequest -Uri $asset.URL -OutFile $executable -ExpectedSha256 $expectedSha256
+	if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'kind source build did not produce kind' }
 	& chmod '+x' $executable
 	if ($LASTEXITCODE -ne 0) { throw 'failed to mark kind executable' }
 	Write-TlcVars @{ env = @{ path = (Get-TlcPkgRoot) } }

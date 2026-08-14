@@ -1,0 +1,62 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/allsagetech/Toolchains/security/vex/k3d-2026-08-14",
+  "author": "AllSageTech",
+  "timestamp": "2026-08-14T10:00:00-05:00",
+  "version": 1,
+  "tooling": "https://github.com/allsagetech/Toolchains",
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://github.com/advisories/GHSA-x744-4wpc-v9h2",
+        "name": "CVE-2026-34040",
+        "description": "Moby authorization-plugin bypass when processing oversized request bodies"
+      },
+      "products": [
+        {
+          "@id": "pkg:golang/github.com/k3d-io/k3d/v5",
+          "identifiers": {
+            "purl": "pkg:golang/github.com/k3d-io/k3d/v5"
+          },
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker",
+              "identifiers": {
+                "purl": "pkg:golang/github.com/docker/docker"
+              }
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The vulnerability is in Docker daemon authorization-plugin request handling. The k3d client executable does not link Docker daemon packages; the package build fails if a github.com/docker/docker/daemon dependency appears."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://github.com/advisories/GHSA-p436-gjf2-799p",
+        "name": "CVE-2025-15558",
+        "description": "Docker CLI plugin manager uncontrolled search path on Windows"
+      },
+      "products": [
+        {
+          "@id": "pkg:golang/github.com/k3d-io/k3d/v5",
+          "identifiers": {
+            "purl": "pkg:golang/github.com/k3d-io/k3d/v5"
+          },
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/cli",
+              "identifiers": {
+                "purl": "pkg:golang/github.com/docker/cli"
+              }
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The vulnerable cli-plugins/manager package is not linked into k3d. The package build verifies the complete Go dependency list and fails if that package appears."
+    }
+  ]
+}

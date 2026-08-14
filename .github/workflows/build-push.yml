@@ -593,6 +593,7 @@ jobs:
           "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "vex=$([string]$TlcPackageConfig.Vex)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Scan Windows package payload
         if: runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False'
@@ -676,6 +677,8 @@ jobs:
         if: steps.pkg.outputs.up-to-date == 'False'
         continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_VEX: ${{ steps.pkg.outputs.vex }}
         with:
           image-ref: ${{ steps.image.outputs.image }}
           format: sarif
@@ -695,6 +698,7 @@ jobs:
           path: |
             artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
             artifacts/${{ steps.pkg.outputs.name }}.spdx.json
+            ${{ steps.pkg.outputs.vex }}
           if-no-files-found: warn
           retention-days: 30
 
@@ -769,7 +773,7 @@ jobs:
             buildType = 'https://github.com/allsagetech/toolchains/.github/workflows/build-push.yml@v1'
             invocation = @{
               configSource = @{ uri = "git+https://github.com/$env:GITHUB_REPOSITORY@$env:GITHUB_SHA"; digest = @{ sha1 = $env:GITHUB_SHA } }
-              parameters = @{ package = '${{ matrix.package }}'; runner = '${{ join(matrix.publish_runs_on, ',') }}' }
+              parameters = @{ package = '${{ matrix.package }}'; runner = '${{ join(matrix.publish_runs_on, ',') }}'; vex = '${{ steps.pkg.outputs.vex }}' }
               environment = @{ runnerOS = $env:RUNNER_OS; runnerArch = $env:RUNNER_ARCH }
             }
             metadata = @{ buildInvocationId = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"; completeness = @{ parameters = $true; environment = $true; materials = $true }; reproducible = $false }
@@ -894,6 +898,7 @@ jobs:
             artifacts/${{ steps.pkg.outputs.name }}.spdx.json
             artifacts/${{ steps.pkg.outputs.name }}.provenance.json
             artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
+            ${{ steps.pkg.outputs.vex }}
           if-no-files-found: warn
           retention-days: 90
 
@@ -907,6 +912,7 @@ jobs:
           SBOM_OUTCOME: ${{ steps.sbom.outcome }}
           SBOM_FALLBACK_OUTCOME: ${{ steps.fallback-sbom.outcome }}
           TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+          VEX_PATH: ${{ steps.pkg.outputs.vex }}
         run: |
           $name = if ($env:PACKAGE_NAME) { $env:PACKAGE_NAME } else { $env:PACKAGE_SCRIPT }
           @(
@@ -917,6 +923,7 @@ jobs:
             "| Upstream state | $(if ($env:UP_TO_DATE -eq 'True') { 'Already current' } elseif ($env:UP_TO_DATE -eq 'False') { 'Built candidate' } else { 'Not reached' }) |"
             "| SPDX SBOM | $(if ($env:UP_TO_DATE -eq 'True') { 'Not required' } elseif ($env:SBOM_OUTCOME -eq 'success') { 'success' } elseif ($env:SBOM_FALLBACK_OUTCOME -eq 'success') { 'success (Trivy fallback)' } elseif ($env:SBOM_OUTCOME) { $env:SBOM_OUTCOME } else { 'Not reached' }) |"
             "| Trivy | $(if ($env:UP_TO_DATE -eq 'True') { 'Not required' } elseif ($env:TRIVY_OUTCOME) { $env:TRIVY_OUTCOME } else { 'Not reached' }) |"
+            "| OpenVEX | $(if ($env:VEX_PATH) { $env:VEX_PATH } else { 'Not used' }) |"
           ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
 
   package-health-summary:
