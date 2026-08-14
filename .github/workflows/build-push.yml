@@ -16,6 +16,16 @@ on:
   schedule:
     - cron: '9 2 */4 * *'
   workflow_dispatch:
+    inputs:
+      package:
+        description: Package name or path to publish (for example, podman or src/pkgs/podman.ps1)
+        required: false
+        type: string
+      full_inventory:
+        description: Explicitly publish the complete package inventory
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -49,6 +59,9 @@ jobs:
       - name: Analyze packages
         id: init
         shell: pwsh
+        env:
+          MANUAL_PACKAGE: ${{ inputs.package }}
+          MANUAL_FULL_INVENTORY: ${{ inputs.full_inventory }}
         run: |
           $ErrorActionPreference = 'Stop'
           . .\src\main.ps1
@@ -156,8 +169,37 @@ jobs:
                   $entries += New-MatrixEntry (Get-Item -LiteralPath $path) $false
                 }
               }
+            } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+              $fullInventory = $env:MANUAL_FULL_INVENTORY -eq 'true'
+              if ($fullInventory) {
+                Write-Host 'Explicit full-inventory manual run selected.'
+                Save-WorkflowMatrix
+                $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
+                $entries = @($obj.include)
+              } else {
+                $selector = ([string]$env:MANUAL_PACKAGE).Trim() -replace '\\', '/'
+                $selector = $selector -replace '^(\./)+', '' -replace '^src/pkgs/', '' -replace '\.ps1$', ''
+                if ([string]::IsNullOrWhiteSpace($selector)) {
+                  throw "Manual runs require a package selector unless 'full_inventory' is explicitly enabled."
+                }
+
+                $packageScripts = @(Get-ChildItem -Path .\src\pkgs -Filter *.ps1 -Recurse -File)
+                $selectedScripts = @($packageScripts | Where-Object {
+                  $relative = $_.FullName.Substring((Join-Path (Get-Location).Path 'src\pkgs').Length).TrimStart([char[]]@('\', '/')) -replace '\\', '/' -replace '\.ps1$', ''
+                  $_.BaseName -ieq $selector -or $relative -ieq $selector
+                })
+                if ($selectedScripts.Count -eq 0) {
+                  throw "No package script matches manual selector '$selector'."
+                }
+                if ($selectedScripts.Count -gt 1) {
+                  throw "Manual package selector '$selector' is ambiguous: $($selectedScripts.FullName -join ', ')"
+                }
+
+                Write-Host "Manual run selected $($selectedScripts[0].FullName)."
+                $entries = @(New-MatrixEntry $selectedScripts[0] $false)
+              }
             } else {
-              # Scheduled and manual runs remain the complete inventory sweep.
+              # Scheduled runs remain the automatic complete inventory sweep.
               Save-WorkflowMatrix
               $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
               $entries = @($obj.include)
@@ -567,6 +609,7 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 8
       matrix: ${{ fromJson(needs.init.outputs.matrix) }}
     env:
       TLC_PKG_ROOT: ${{ matrix.publish_pkg_root }}
@@ -910,12 +953,43 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $identity = "https://github.com/$env:GITHUB_WORKFLOW_REF"
           $issuer = 'https://token.actions.githubusercontent.com'
-          cosign verify --certificate-identity $identity --certificate-oidc-issuer $issuer $env:DIGEST_REF
-          if ($LASTEXITCODE -ne 0) { throw 'Published signature verification failed.' }
-          cosign verify-attestation --type spdxjson --certificate-identity $identity --certificate-oidc-issuer $issuer $env:DIGEST_REF
-          if ($LASTEXITCODE -ne 0) { throw 'Published SBOM attestation verification failed.' }
-          cosign verify-attestation --type slsaprovenance --certificate-identity $identity --certificate-oidc-issuer $issuer $env:DIGEST_REF
-          if ($LASTEXITCODE -ne 0) { throw 'Published provenance attestation verification failed.' }
+
+          function Invoke-CosignVerification {
+            param(
+              [Parameter(Mandatory=$true)][string]$Description,
+              [Parameter(Mandatory=$true)][string[]]$Arguments,
+              [int]$MaxAttempts = 3,
+              [int]$TimeoutSeconds = 150
+            )
+
+            $cosign = Get-Command cosign -ErrorAction Stop
+            for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+              Write-Host "$Description (attempt $attempt/$MaxAttempts)"
+              $process = Start-Process -FilePath $cosign.Source -ArgumentList $Arguments -NoNewWindow -PassThru
+              $finished = $process.WaitForExit($TimeoutSeconds * 1000)
+              if (-not $finished) {
+                try { $process.Kill($true) } catch { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+                $reason = "timed out after $TimeoutSeconds seconds"
+              } elseif ($process.ExitCode -eq 0) {
+                return
+              } else {
+                $reason = "failed with exit code $($process.ExitCode)"
+              }
+
+              if ($attempt -lt $MaxAttempts) {
+                $delay = [math]::Pow(2, $attempt)
+                Write-Warning "$Description $reason; retrying in $delay seconds."
+                Start-Sleep -Seconds $delay
+              }
+            }
+
+            throw "$Description $reason after $MaxAttempts attempts."
+          }
+
+          $identityArguments = @('--timeout', '2m', '--certificate-identity', $identity, '--certificate-oidc-issuer', $issuer)
+          Invoke-CosignVerification -Description 'Published signature verification' -Arguments (@('verify') + $identityArguments + $env:DIGEST_REF)
+          Invoke-CosignVerification -Description 'Published SBOM attestation verification' -Arguments (@('verify-attestation', '--type', 'spdxjson') + $identityArguments + $env:DIGEST_REF)
+          Invoke-CosignVerification -Description 'Published provenance attestation verification' -Arguments (@('verify-attestation', '--type', 'slsaprovenance') + $identityArguments + $env:DIGEST_REF)
 
       - name: Promote signed digest to immutable version tag without rebuilding
         if: steps.pkg.outputs.up-to-date == 'False'

@@ -24,6 +24,14 @@ is best-effort after a primary failure so a missing secondary artifact does not
 hide the original cause. The final `package-health.json` artifact provides the
 result and job URL for every selected package.
 
+Manual workflow runs are package-targeted by default. Supply a package base name
+such as `podman` or a repository-relative script path such as
+`src/pkgs/podman.ps1`. A complete manual sweep requires explicitly enabling
+`full_inventory`. Release matrices run at most eight package jobs concurrently,
+and each Cosign verification command has bounded retries plus both an internal
+and an external timeout so registry or transparency-log latency cannot occupy a
+runner indefinitely.
+
 Packages marked `VerifiedDownloads = $false` or `PublishEligible = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification, wait for an upstream security fix, or intentionally remove the package; quarantine never converts an unverified or vulnerable input into an approved release artifact.
 
 The unique `staging-*` tag makes a candidate addressable by digest for signing

@@ -19,7 +19,8 @@
 
 ### Changed
 
-- Route push publication jobs from changed package and asset paths, use bounded representatives for shared infrastructure, and reserve complete inventory sweeps for scheduled and manual runs.
+- Make manual package publishing targeted by default, require explicit full-inventory opt-in, preserve shared runner capacity with bounded release parallelism, and bound Cosign verification with timeouts and retries.
+- Route push publication jobs from changed package and asset paths, use bounded representatives for shared infrastructure, and reserve automatic complete inventory sweeps for scheduled runs.
 - Normalize package `path` definitions to the case-sensitive Linux `PATH` variable during local execution.
 - Prefer GitHub's bounded latest-release endpoint, fall back across releases that contain the requested asset, and avoid oversized release-history responses.
 - Remove successful Docker Hub `staging-*` tags after verified promotion and periodically clean abandoned staging tags through the tag-specific API.
