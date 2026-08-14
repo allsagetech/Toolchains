@@ -37,8 +37,8 @@ function global:Install-TlcPackage {
 		$env:GOSUMDB = 'sum.golang.org'
 		$env:GOTOOLCHAIN = $TlcPackageConfig.GoToolchain
 		$env:GOWORK = 'off'
-		$go = Get-Command go -CommandType Application -ErrorAction Stop
-		& $go.Source install "sigs.k8s.io/kind@v$($TlcPackageConfig.Version)"
+		$go = Get-TlcApplicationPath -Name 'go'
+		& $go install "sigs.k8s.io/kind@v$($TlcPackageConfig.Version)"
 		if ($LASTEXITCODE -ne 0) { throw "verified kind source build failed with exit code $LASTEXITCODE" }
 	} finally {
 		foreach ($name in $previous.Keys) {

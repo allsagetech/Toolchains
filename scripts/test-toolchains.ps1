@@ -340,6 +340,14 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($dockerDesktopInstallerText -match 'Get-AuthenticodeSignature') 'Docker Desktop bootstrap does not verify the installer Authenticode signature.'
 	Assert-True ($dockerDesktopInstallerText -match "arguments \+= '--user'") 'Docker Desktop bootstrap does not default to a per-user installation.'
 	Assert-True ($dockerDesktopInstallerText -notmatch "arguments = @\('install',\s*'--accept-license'") 'Docker Desktop bootstrap accepts the license without explicit user consent.'
+	$podmanPackageText = Get-Content -LiteralPath .\src\pkgs\podman.ps1 -Raw
+	Assert-True ($podmanPackageText -match "Owner 'podman-container-tools'") 'Podman package does not use the official release repository.'
+	Assert-True ($podmanPackageText -match 'podman-remote-release-windows_amd64\\\.zip') 'Podman package does not select the official Windows x64 CLI bundle.'
+	Assert-True ($podmanPackageText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Podman does not use the shared checksum-verified source build.'
+	Assert-True ($podmanPackageText -match "GoToolchain = 'go1\.26\.6'") 'Podman does not use the patched Go toolchain.'
+	Assert-True ($podmanPackageText -match "PatchedCryptoVersion = 'v0\.52\.0'") 'Podman machine helpers do not require the fixed x/crypto version.'
+	Assert-True ($podmanPackageText -match "GvproxyVersion = 'v0\.8\.9'") 'Podman does not pin the upstream machine helper source version.'
+	Assert-True ($podmanPackageText -match 'BuildRevision = 1') 'Patched Podman build does not carry a republishable package revision.'
 	$pushText = (Get-Command Invoke-DockerPush).Definition
 	Assert-True ($pushText -match 'existing signature state was not proven') 'Requested signing can silently skip an existing image tag.'
 
@@ -356,6 +364,12 @@ function Test-ProductionReadinessPolicies {
 		Assert-True (-not [bool]$TlcPackageConfig.VerifiedDownloads) "$quarantinedScript is not quarantined despite missing publisher provenance metadata."
 		Assert-True (-not [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) "$quarantinedScript quarantine does not explain the provenance gap."
 	}
+	Clear-TlcPackageScript
+	. .\src\pkgs\node\node24.ps1
+	$node24Publication = Get-TlcPackagePublicationState
+	Assert-True $node24Publication.VerifiedDownloads 'Node 24 security quarantine incorrectly marks its verified upstream archive unverified.'
+	Assert-True (-not $node24Publication.PublishEligible) 'Node 24 can publish despite active HIGH/CRITICAL findings in its upstream npm bundle.'
+	Assert-True (-not [string]::IsNullOrWhiteSpace($node24Publication.QuarantineReason)) 'Node 24 security quarantine has no explanation.'
 	$sevenZipPackageText = Get-Content -LiteralPath .\src\pkgs\7-zip.ps1 -Raw
 	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'
 	$doxygenPackageText = Get-Content -LiteralPath .\src\pkgs\doxygen.ps1 -Raw
@@ -374,16 +388,93 @@ function Test-ProductionReadinessPolicies {
 	}
 	$utilText = Get-Content -LiteralPath .\src\util.ps1 -Raw
 	Assert-True ($utilText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
+	Assert-True ($utilText -match '/releases/latest') 'GitHub release discovery does not prefer the bounded latest-release endpoint.'
+	Assert-True ($utilText -match 'releases\?per_page=20') 'GitHub release fallback still requests oversized release-history pages.'
+	Assert-True ($utilText -match "OSPlatform\]::Windows\)\) \{ 'Path' \} else \{ 'PATH' \}") 'Local execution does not normalize PATH casing for Linux hosts.'
+	$releaseSelection = Select-TlcGitHubReleaseAsset -Releases @(
+		[pscustomobject]@{ tag_name = 'v2.0.0'; prerelease = $false; assets = @() },
+		[pscustomobject]@{ tag_name = 'v1.9.0'; prerelease = $false; assets = @([pscustomobject]@{ name = 'tool-win-x64.zip'; browser_download_url = 'https://example.invalid/tool.zip' }) }
+	) -AssetPattern '^tool-win-x64\.zip$' -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+	Assert-True ([string]$releaseSelection.Release.tag_name -eq 'v1.9.0') 'GitHub release selection did not fall back when the newest release had no matching asset.'
+	$directPushSelection = @(Get-TlcPushPackagePaths -ChangedPath @('src/pkgs/podman.ps1', 'src/pkgs/podman.ps1', 'README.md'))
+	Assert-True ($directPushSelection.Count -eq 1 -and $directPushSelection[0] -eq 'src/pkgs/podman.ps1') 'Push routing did not select exactly one directly changed package.'
+	$assetPushSelection = @(Get-TlcPushPackagePaths -ChangedPath @('src/assets/kubectl/main.go'))
+	Assert-True ($assetPushSelection.Count -eq 2) 'Push routing did not select both kubectl platform packages for their shared source asset.'
+	Assert-True ($assetPushSelection -contains 'src/pkgs/kubectl.ps1') 'Push routing omitted the Windows kubectl package for its shared source asset.'
+	Assert-True ($assetPushSelection -contains 'src/pkgs/kubectl-linux.ps1') 'Push routing omitted the Linux kubectl package for its shared source asset.'
+	$sharedPushSelection = @(Get-TlcPushPackagePaths -ChangedPath @('src/main.ps1'))
+	Assert-True ($sharedPushSelection.Count -eq 2) 'Shared publication infrastructure changes do not select a bounded Windows/Linux smoke set.'
+	Assert-True ($sharedPushSelection -contains 'src/pkgs/websocat.ps1') 'Shared publication infrastructure changes omit the Windows smoke package.'
+	Assert-True ($sharedPushSelection -contains 'src/pkgs/git-linux.ps1') 'Shared publication infrastructure changes omit the Linux smoke package.'
+	$familyPushSelection = @(Get-TlcPushPackagePaths -ChangedPath @('src/package-families.ps1'))
+	foreach ($familyRepresentative in @('src/pkgs/node/node22.ps1', 'src/pkgs/jdk/jdk17.ps1', 'src/pkgs/kubectl.ps1', 'src/pkgs/kubectl-linux.ps1')) {
+		Assert-True ($familyPushSelection -contains $familyRepresentative) "Shared package-family changes omit representative $familyRepresentative."
+	}
+	Assert-True (@(Get-TlcPushPackagePaths -ChangedPath @('README.md', 'CHANGELOG.md')).Count -eq 0) 'Documentation-only pushes still select publication jobs.'
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
 	Assert-True ($workflowText -match '\$TlcPackageConfig\.Tags\s*=\s*@\(\)') 'Forced PR smoke builds do not clear published package tags.'
 	Assert-True ($workflowText -match 'Where-Object \{ \[bool\]\$_\.verified_downloads -and \[bool\]\$_\.publish_eligible \}') 'Workflow matrices do not exclude unverified or quarantined packages.'
+	Assert-True ($workflowText -match 'Get-TlcPushPackagePaths -ChangedPath \$changed') 'Push workflows do not route the changed file set into the bounded package selector.'
+	Assert-True ($workflowText -match 'git diff --name-only \$before \$after') 'Push workflows do not compare the exact before/after commit trees.'
+	Assert-True ($workflowText -match 'Scheduled and manual runs remain the complete inventory sweep\.[\s\S]+Save-WorkflowMatrix') 'Scheduled and manual workflows no longer perform the full package inventory sweep.'
 	Assert-True (([regex]::Matches($workflowText, 'GH_TOKEN:\s+\$\{\{ github\.token \}\}')).Count -ge 4) 'Parallel build jobs do not authenticate GitHub API requests.'
 	Assert-True ($workflowText -match 'RUNNER_OS -eq ''Linux''[\s\S]+Get-ChildItem -LiteralPath \$full -Force \| Remove-Item') 'Linux package cleanup still removes the protected mount root.'
 	Assert-True ($workflowText -match 'scanner-smoke:') 'Publication does not validate scanner bootstrap before starting the package matrix.'
+	Assert-True ($workflowText -match 'scanner-smoke:[\s\S]+needs: \[init, validate\][\s\S]+needs\.init\.outputs\.has-packages == ''true''') 'Scanner bootstrap runs when no package publication job was selected.'
 	Assert-True ($workflowText -match 'Enforce supply-chain evidence gate') 'Publication does not distinguish scanner infrastructure failures from scan evidence.'
+	Assert-True ($workflowText -match 'limit-severities-for-sarif:\s+true') 'Trivy SARIF evidence is not restricted to the enforced HIGH/CRITICAL severities.'
+	Assert-True ($workflowText -match 'Install-VerifiedCosign\.ps1') 'Publication does not use the repository-controlled verified Cosign bootstrap.'
+	Assert-True ($workflowText -notmatch 'sigstore/cosign-installer') 'Publication still depends on the broken Windows Cosign installer action.'
 	Assert-True ($workflowText -match 'package-health-summary:') 'Publication does not produce a consolidated package-health artifact.'
+	Assert-True ($workflowText -match 'Remove-DockerHubStagingTags\.ps1') 'Successful publication does not clean up its staging tag.'
+	$stagingCleanupText = Get-Content -LiteralPath .\.github\scripts\Remove-DockerHubStagingTags.ps1 -Raw
+	Assert-True ($stagingCleanupText -match 'https://hub\.docker\.com/v2/auth/token') 'Staging cleanup does not use the documented Docker Hub token endpoint.'
+	Assert-True ($stagingCleanupText -match '/namespaces/\$namespaceSegment/repositories/\$repositorySegment/tags/\$tagSegment') 'Staging cleanup does not delete one exact Docker Hub tag.'
+	Assert-True ($stagingCleanupText -notmatch '/manifests/') 'Staging cleanup can delete a shared registry manifest instead of one tag.'
+	Assert-True ($stagingCleanupText -match "'User-Agent'") 'Docker Hub staging cleanup does not send an explicit browser User-Agent.'
+	Assert-True (Test-Path -LiteralPath .\.github\workflows\cleanup-staging-tags.yml -PathType Leaf) 'Orphaned staging tags have no scheduled cleanup workflow.'
+	$cosignInstallerText = Get-Content -LiteralPath .\.github\scripts\Install-VerifiedCosign.ps1 -Raw
+	Assert-True ($cosignInstallerText -match '\$version = ''v2\.6\.0''') 'Cosign bootstrap version is not pinned.'
+	Assert-True ($cosignInstallerText -match '7beb4dd1e19a72c328bbf7c0d7342d744edbf5cbb082f227b2b76e04a21c16ef') 'Cosign Windows asset digest is not pinned.'
+	Assert-True ($cosignInstallerText -match 'ea5c65f99425d6cfbb5c4b5de5dac035f14d09131c1a0ea7c7fc32eab39364f9') 'Cosign Linux asset digest is not pinned.'
+	Assert-True ($cosignInstallerText -match "'User-Agent'") 'Cosign bootstrap does not send an explicit browser User-Agent.'
 	$familyText = Get-Content -LiteralPath .\src\package-families.ps1 -Raw
 	Assert-True ($familyText -match 'Not Found\|no upstream hash') 'Shared Adoptium package logic does not skip unavailable optional x86 assets under strict verification.'
+	foreach ($patchedModule in @(
+		@{ Module = 'golang.org/x/net'; Version = 'v0.56.0' },
+		@{ Module = 'golang.org/x/sys'; Version = 'v0.46.0' },
+		@{ Module = 'golang.org/x/text'; Version = 'v0.39.0' }
+	)) {
+		Assert-True ($familyText -match [regex]::Escape($patchedModule.Module)) "Shared kubectl source build omits dependency: $($patchedModule.Module)"
+		Assert-True ($familyText -match [regex]::Escape($patchedModule.Version)) "Shared kubectl source build does not pin $($patchedModule.Module) to $($patchedModule.Version)."
+	}
+	Assert-True ($familyText -match "GoToolchain = 'go1.26.6'") 'Shared kubectl source build does not pin the fixed Go toolchain.'
+	Assert-True ($familyText -match 'BuildRevision = 1') 'Shared kubectl source build does not carry a republishable package revision.'
+	$cueText = Get-Content -LiteralPath .\src\pkgs\cue.ps1 -Raw
+	Assert-True ($cueText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Cue still packages the vulnerable upstream binary.'
+	Assert-True ($cueText -match "PatchedTextVersion = 'v0\.39\.0'") 'Cue does not require the fixed golang.org/x/text version.'
+	Assert-True ($cueText -match 'BuildRevision = 1') 'Cue patched source build does not carry a republishable package revision.'
+	$helmText = Get-Content -LiteralPath .\src\pkgs\helm.ps1 -Raw
+	Assert-True ($helmText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Helm still packages the vulnerable upstream binary archive.'
+	Assert-True ($helmText -match "PatchedOrasVersion = 'v2\.6\.2'") 'Helm does not require the fixed oras-go version.'
+	Assert-True ($helmText -match 'BuildRevision = 1') 'Helm patched source build does not carry a republishable package revision.'
+	foreach ($kubectlScript in @('.\src\pkgs\kubectl.ps1', '.\src\pkgs\kubectl-linux.ps1')) {
+		$kubectlText = Get-Content -LiteralPath $kubectlScript -Raw
+		Assert-True ($kubectlText -match 'Initialize-TlcKubectlPackage') "$kubectlScript bypasses the shared verified source build."
+		Assert-True ($kubectlText -notmatch 'dl\.k8s\.io/release/\$tag/bin') "$kubectlScript still packages the vulnerable upstream binary."
+	}
+	$goSourceBuildScripts = @(
+		'.\src\package-families.ps1',
+		'.\src\pkgs\kind.ps1',
+		'.\src\pkgs\kind-linux.ps1',
+		'.\src\pkgs\k3d.ps1',
+		'.\src\pkgs\k3d-linux.ps1'
+	)
+	foreach ($goSourceBuildScript in $goSourceBuildScripts) {
+		$goSourceBuildText = Get-Content -LiteralPath $goSourceBuildScript -Raw
+		Assert-True ($goSourceBuildText -match "Get-TlcApplicationPath -Name 'go'") "$goSourceBuildScript does not resolve exactly one Go executable."
+		Assert-True ($goSourceBuildText -notmatch '\$go\.Source') "$goSourceBuildScript can still concatenate multiple Go command sources."
+	}
 	foreach ($optionalX86Script in @(
 		'.\src\pkgs\jdk\jdk8.ps1', '.\src\pkgs\jdk\jdk11.ps1', '.\src\pkgs\jdk\jdk17.ps1',
 		'.\src\pkgs\jre\jre8.ps1', '.\src\pkgs\jre\jre11.ps1', '.\src\pkgs\jre\jre17.ps1'
@@ -420,7 +511,7 @@ function Test-ProductionReadinessPolicies {
 	$vsCustomBuild = Get-Content -LiteralPath .\src\pkgs\vs-buildtools.ps1 -Raw
 	Assert-True ($vsCustomBuild -match 'foreach\s*\(\s*\$label\s+in\s+\$labels\s*\)') 'Visual Studio custom image build does not apply common contract labels.'
 	$matrixText = (Get-Command Save-WorkflowMatrix).Definition
-	foreach ($field in @('verified_downloads', 'publish_eligible', 'unverified_download_reason')) {
+	foreach ($field in @('verified_downloads', 'publish_eligible', 'quarantine_reason', 'unverified_download_reason')) {
 		Assert-True ($matrixText -match $field) "Workflow matrix does not expose provenance field $field."
 	}
 	try {

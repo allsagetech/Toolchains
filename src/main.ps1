@@ -82,6 +82,24 @@ function Clear-TlcPackageScript {
 	Clear-Variable 'TlcPackageConfig' -Force -ErrorAction SilentlyContinue
 }
 
+function Get-TlcPackagePublicationState {
+	$verifiedDownloads = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
+	$descriptorEligible = if ($TlcPackageConfig.ContainsKey('PublishEligible')) { [bool]$TlcPackageConfig.PublishEligible } else { $true }
+	$publishEligible = $verifiedDownloads -and $descriptorEligible
+	$reason = if (-not $verifiedDownloads) {
+		[string]$TlcPackageConfig.UnverifiedDownloadReason
+	} elseif (-not $descriptorEligible) {
+		[string]$TlcPackageConfig.PublicationBlockReason
+	} else {
+		''
+	}
+	return [pscustomobject]@{
+		VerifiedDownloads = $verifiedDownloads
+		PublishEligible = $publishEligible
+		QuarantineReason = $reason
+	}
+}
+
 function Test-TlcPackageScript {
 	Get-Item Function:\Install-TlcPackage | Out-Null
 	Get-Item Function:\Test-TlcPackageInstall | Out-Null
@@ -98,6 +116,9 @@ function Test-TlcPackageScript {
 	}
 	if ($TlcPackageConfig.ContainsKey('VerifiedDownloads') -and -not [bool]$TlcPackageConfig.VerifiedDownloads -and [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) {
 		Write-Error "toolchains: $($TlcPackageConfig.Name) marks downloads unverified without an UnverifiedDownloadReason"
+	}
+	if ($TlcPackageConfig.ContainsKey('PublishEligible') -and -not [bool]$TlcPackageConfig.PublishEligible -and [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.PublicationBlockReason)) {
+		Write-Error "toolchains: $($TlcPackageConfig.Name) blocks publication without a PublicationBlockReason"
 	}
 	if ($TlcPackageConfig.Vex) {
 		$vexRelativePath = [string]$TlcPackageConfig.Vex
@@ -382,6 +403,71 @@ function Invoke-TlcScript($pkg) {
 	}
 }
 
+function Get-TlcPushPackagePaths {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][AllowEmptyCollection()][string[]]$ChangedPath,
+		[string]$RepoRoot = (Get-Location).Path
+	)
+
+	$selected = @()
+	$sharedRepresentatives = @(
+		'src/pkgs/websocat.ps1',
+		'src/pkgs/git-linux.ps1'
+	)
+	$familyRepresentatives = @(
+		'src/pkgs/node/node22.ps1',
+		'src/pkgs/jdk/jdk17.ps1',
+		'src/pkgs/kubectl.ps1',
+		'src/pkgs/kubectl-linux.ps1'
+	)
+	$sharedFiles = @(
+		'src/main.ps1',
+		'src/model-catalog.ps1',
+		'src/network.ps1',
+		'src/upstream-metadata.ps1',
+		'src/util.ps1',
+		'.github/workflows/build-push.yml'
+	)
+
+	foreach ($rawPath in @($ChangedPath)) {
+		if ([string]::IsNullOrWhiteSpace($rawPath)) { continue }
+		$path = ([string]$rawPath -replace '\\', '/') -replace '^\./', ''
+
+		if ($path -match '^src/pkgs/.+\.ps1$') {
+			$selected += $path
+		}
+
+		if ($path -match '^src/assets/([^/]+)/') {
+			$assetName = $Matches[1]
+			$selected += "src/pkgs/$assetName.ps1"
+			if ($assetName -eq 'kubectl') {
+				$selected += 'src/pkgs/kubectl-linux.ps1'
+			}
+		}
+
+		$isSharedInfrastructure = $path -in $sharedFiles -or
+			$path -match '^Dockerfile(?:\..+)?$' -or
+			$path -match '^\.github/scripts/.+\.ps1$'
+		if ($isSharedInfrastructure) {
+			$selected += $sharedRepresentatives
+		}
+
+		if ($path -eq 'src/package-families.ps1') {
+			$selected += $sharedRepresentatives
+			$selected += $familyRepresentatives
+		}
+	}
+
+	$existing = @()
+	foreach ($path in @($selected | Sort-Object -Unique)) {
+		if (Test-Path -LiteralPath (Join-Path $RepoRoot $path) -PathType Leaf) {
+			$existing += $path
+		}
+	}
+	return @($existing)
+}
+
 function Save-WorkflowMatrix {
 	$tagList = Get-DockerTags (Get-TlcDockerRepo)
 	$pkgs = @()
@@ -399,15 +485,16 @@ function Save-WorkflowMatrix {
 		$runsOn = Get-TlcPackageRunsOn
 		$publishRunsOn = Get-TlcPackagePublishRunsOn
 		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-		$verifiedDownloads = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
+		$publicationState = Get-TlcPackagePublicationState
 		$entry = @{
 			package            = $scriptPath
 			runs_on            = $runsOn
 			publish_runs_on    = $publishRunsOn
 			tier               = $tier
-			verified_downloads  = $verifiedDownloads
-			publish_eligible    = $verifiedDownloads
-			unverified_download_reason = if ($verifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
+			verified_downloads  = $publicationState.VerifiedDownloads
+			publish_eligible    = $publicationState.PublishEligible
+			quarantine_reason   = $publicationState.QuarantineReason
+			unverified_download_reason = if ($publicationState.VerifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
 			pkg_root           = Get-TlcPkgRootForRunner -RunsOn $runsOn
 			cache_path         = Get-TlcCachePathForRunner -RunsOn $runsOn
 			publish_pkg_root   = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn

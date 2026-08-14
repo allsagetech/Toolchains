@@ -1,0 +1,48 @@
+# <#
+# Toolchains
+# Copyright (c) 2026 AllSageTech
+# SPDX-License-Identifier: MPL-2.0
+# #>
+name: Cleanup Docker Hub Staging Tags
+
+on:
+  schedule:
+    - cron: '37 3 * * *'
+  workflow_dispatch:
+    inputs:
+      older_than_days:
+        description: Delete staging tags at least this many days old
+        required: true
+        default: '7'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cleanup-docker-hub-staging-tags
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove expired staging tags
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Remove expired staging tags through Docker Hub API
+        shell: pwsh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+          OLDER_THAN_DAYS: ${{ inputs.older_than_days || '7' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./.github/scripts/Remove-DockerHubStagingTags.ps1 `
+            -Repository $env:TLC_DOCKER_REPO `
+            -OlderThanDays ([int]$env:OLDER_THAN_DAYS)

@@ -38,9 +38,9 @@ function global:Install-TlcPackage {
 		$env:GOSUMDB = 'sum.golang.org'
 		$env:GOTOOLCHAIN = $TlcPackageConfig.GoToolchain
 		$env:GOWORK = 'off'
-		$go = Get-Command go -CommandType Application -ErrorAction Stop
+		$go = Get-TlcApplicationPath -Name 'go'
 		$module = "github.com/k3d-io/k3d/v5@v$($TlcPackageConfig.Version)"
-		$downloadJson = (& $go.Source mod download -json $module | Out-String)
+		$downloadJson = (& $go mod download -json $module | Out-String)
 		if ($LASTEXITCODE -ne 0) { throw "verified k3d source download failed with exit code $LASTEXITCODE" }
 		$download = $downloadJson | ConvertFrom-Json
 		if (-not $download.Dir -or -not (Test-Path -LiteralPath $download.Dir -PathType Container)) { throw 'verified k3d module source was not available' }
@@ -49,10 +49,10 @@ function global:Install-TlcPackage {
 		Push-Location $sourceRoot
 		$locationPushed = $true
 
-		& $go.Source get 'golang.org/x/net@v0.56.0' 'golang.org/x/text@v0.39.0' 'google.golang.org/grpc@v1.82.1'
+		& $go get 'golang.org/x/net@v0.56.0' 'golang.org/x/text@v0.39.0' 'google.golang.org/grpc@v1.82.1'
 		if ($LASTEXITCODE -ne 0) { throw "k3d dependency patch failed with exit code $LASTEXITCODE" }
 
-		$dependencies = @(& $go.Source list -deps .)
+		$dependencies = @(& $go list -deps .)
 		if ($LASTEXITCODE -ne 0) { throw "k3d dependency verification failed with exit code $LASTEXITCODE" }
 		$forbidden = @($dependencies | Where-Object { $_ -eq 'github.com/docker/cli/cli-plugins/manager' -or $_ -like 'github.com/docker/docker/daemon*' })
 		if ($forbidden.Count -gt 0) { throw "k3d unexpectedly links VEX-excluded code: $($forbidden -join ', ')" }
@@ -61,7 +61,7 @@ function global:Install-TlcPackage {
 		if ($versionSource -notmatch 'var K3sVersion = "([^"]+)"') { throw 'could not determine the k3s version embedded by k3d' }
 		$k3sVersion = $Matches[1]
 		$ldflags = "-s -w -X github.com/k3d-io/k3d/v5/version.Version=v$($TlcPackageConfig.Version) -X github.com/k3d-io/k3d/v5/version.K3sVersion=$k3sVersion"
-		& $go.Source build -trimpath -ldflags $ldflags -o (Get-TlcPkgPath 'k3d.exe') .
+		& $go build -trimpath -ldflags $ldflags -o (Get-TlcPkgPath 'k3d.exe') .
 		if ($LASTEXITCODE -ne 0) { throw "verified k3d source build failed with exit code $LASTEXITCODE" }
 	} finally {
 		if ($locationPushed) { Pop-Location }

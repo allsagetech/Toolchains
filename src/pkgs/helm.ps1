@@ -6,6 +6,9 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
     Name = 'helm'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	PatchedOrasVersion = 'v2.6.2'
 }
 
 function global:Install-TlcPackage {
@@ -16,53 +19,29 @@ function global:Install-TlcPackage {
     }
     $Latest = Get-GitHubTag @Params
 
-    $TlcPackageConfig.UpToDate = -not $Latest.Version.LaterThan($TlcPackageConfig.Latest)
-    $TlcPackageConfig.Version  = $Latest.Version.ToString()
+	$upstreamVersion = $Latest.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version  = $packageVersion.ToString()
 
     if ($TlcPackageConfig.UpToDate) {
         return
     }
-
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for helm.'
-    }
-
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT ("helm-{0}" -f $Latest.Version)
-    if (-not (Test-Path $InstallRoot)) {
-        New-Item -ItemType Directory -Path $InstallRoot | Out-Null
-    }
-
-    $Tag       = $Latest.name
-    $AssetName = "helm-$Tag-windows-amd64.zip"
-    $Download  = "https://get.helm.sh/$AssetName"
-
-	$ZipPath = Join-Path $InstallRoot $AssetName
-	$ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri "$Download.sha256sum" -AssetName $AssetName
-
-	Write-Host "Downloading Helm $Tag from $Download"
-	Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath -ExpectedSha256 $ExpectedSha256
-
-    if (-not (Test-Path $ZipPath)) {
-        throw "Failed to download Helm archive from $Download"
-    }
-
-    Expand-Archive -LiteralPath $ZipPath -DestinationPath $InstallRoot -Force
-
-    $HelmExe = Get-ChildItem -Path $InstallRoot -Recurse -Filter 'helm.exe' |
-        Select-Object -First 1
-
-    if (-not $HelmExe) {
-        throw "helm.exe not found after extracting $AssetName"
-    }
-
-    $TargetExe = Join-Path $InstallRoot 'helm.exe'
-    if ($HelmExe.FullName -ne $TargetExe) {
-        Copy-Item $HelmExe.FullName -Destination $TargetExe -Force
-    }
+	$tag = [string]$Latest.Name
+	$outputPath = Get-TlcPkgPath 'helm.exe'
+	$ldflags = "-s -w -X helm.sh/helm/v4/internal/version.version=$tag -X helm.sh/helm/v4/internal/version.metadata= -X helm.sh/helm/v4/internal/version.gitTreeState=clean"
+	Invoke-TlcVerifiedGoCommandBuild `
+		-Module 'helm.sh/helm/v4' `
+		-Version $tag `
+		-Command 'helm.sh/helm/v4/cmd/helm' `
+		-OutputPath $outputPath `
+		-MinimumModules @{ 'oras.land/oras-go/v2' = $TlcPackageConfig.PatchedOrasVersion } `
+		-GoToolchain $TlcPackageConfig.GoToolchain `
+		-LdFlags $ldflags
 
     Write-TlcVars @{
         env = @{
-            path = $InstallRoot
+			path = (Get-TlcPkgRoot)
         }
     }
 }

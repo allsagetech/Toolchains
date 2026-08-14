@@ -7,6 +7,9 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'cue'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	PatchedTextVersion = 'v0.39.0'
 }
 
 function global:Install-TlcPackage {
@@ -17,19 +20,26 @@ function global:Install-TlcPackage {
 		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
 	}
 	$Asset = Get-GitHubRelease @Params
-	$TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
-	$TlcPackageConfig.Version = $Asset.Version.ToString()
+	$upstreamVersion = $Asset.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $packageVersion.ToString()
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	$Params = @{
-		AssetName = $Asset.Name
-		AssetURL  = $Asset.URL
-	}
-	Install-BuildTool @Params
+
+	$outputPath = Get-TlcPkgPath 'cue.exe'
+	Invoke-TlcVerifiedGoCommandBuild `
+		-Module 'cuelang.org/go' `
+		-Version ([string]$Asset.Identifier) `
+		-Command 'cuelang.org/go/cmd/cue' `
+		-OutputPath $outputPath `
+		-MinimumModules @{ 'golang.org/x/text' = $TlcPackageConfig.PatchedTextVersion } `
+		-GoToolchain $TlcPackageConfig.GoToolchain
+
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'cue.exe' | Select-Object -First 1).DirectoryName
+			path = (Get-TlcPkgRoot)
 		}
 	}
 }

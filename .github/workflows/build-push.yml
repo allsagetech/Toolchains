@@ -61,16 +61,17 @@ jobs:
             $runsOn = Get-TlcPackageRunsOn
             $publishRunsOn = Get-TlcPackagePublishRunsOn
             $tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-            $verifiedDownloads = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
+            $publicationState = Get-TlcPackagePublicationState
             [pscustomobject]@{
               package = $Script.FullName.Replace((Get-Location).Path, '.')
               runs_on = $runsOn
               publish_runs_on = $publishRunsOn
               tier = $tier
               force_build = $ForceBuild
-              verified_downloads = $verifiedDownloads
-              publish_eligible = $verifiedDownloads
-              unverified_download_reason = if ($verifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
+              verified_downloads = $publicationState.VerifiedDownloads
+              publish_eligible = $publicationState.PublishEligible
+              quarantine_reason = $publicationState.QuarantineReason
+              unverified_download_reason = if ($publicationState.VerifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
               pkg_root = Get-TlcPkgRootForRunner -RunsOn $runsOn
               cache_path = Get-TlcCachePathForRunner -RunsOn $runsOn
               publish_pkg_root = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn
@@ -97,18 +98,73 @@ jobs:
                 continue
               }
               if (-not [bool]$entry.verified_downloads -or -not [bool]$entry.publish_eligible) {
-                Write-Output "::warning file=$path,title=Package quarantined::$($entry.unverified_download_reason)"
+                Write-Output "::warning file=$path,title=Package quarantined::$($entry.quarantine_reason)"
                 continue
               }
               $entries += $entry
             }
           } else {
-            Save-WorkflowMatrix
-            $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
-            $entries = @($obj.include)
+            $entries = @()
+            if ($env:GITHUB_EVENT_NAME -eq 'push') {
+              $refSelector = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME -replace '^.*/', '' } else { '' }
+              $selectedReleaseScript = Get-ChildItem -Path .\src\pkgs -Filter *.ps1 -Recurse -File |
+                Where-Object {
+                  "$refSelector.ps1" -eq $_.Name -or
+                    ($refSelector -and $refSelector.StartsWith("$($_.BaseName)-"))
+                } |
+                Select-Object -First 1
+
+              if ($selectedReleaseScript) {
+                Write-Host "Package-specific ref selected $($selectedReleaseScript.FullName)."
+                $entries = @(New-MatrixEntry $selectedReleaseScript $false)
+              } else {
+                $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+                $before = [string]$event.before
+                $after = [string]$event.after
+                if ($after -notmatch '^[0-9a-fA-F]{40}$') {
+                  $after = (& git rev-parse HEAD).Trim()
+                  if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the pushed commit.' }
+                }
+                if ($after -notmatch '^[0-9a-fA-F]{40}$') {
+                  throw 'Could not resolve the pushed commit.'
+                }
+
+                if ($before -match '^0{40}$') {
+                  $changed = @(& git diff-tree --root --no-commit-id --name-only -r $after)
+                } elseif ($before -match '^[0-9a-fA-F]{40}$') {
+                  $changed = @(& git diff --name-only $before $after --)
+                } else {
+                  $changed = @()
+                  $global:LASTEXITCODE = 1
+                }
+
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Output '::warning title=Push diff fallback::The previous commit was unavailable; selecting from the files recorded in the push event.'
+                  $changed = @()
+                  foreach ($commit in @($event.commits)) {
+                    $changed += @($commit.added) + @($commit.modified) + @($commit.removed)
+                  }
+                  if ($changed.Count -eq 0) {
+                    $changed = @(& git show --pretty='' --name-only $after --)
+                    if ($LASTEXITCODE -ne 0) { throw "Could not determine files changed by push $after." }
+                  }
+                }
+
+                $paths = @(Get-TlcPushPackagePaths -ChangedPath $changed)
+                Write-Host "Push changed $(@($changed | Sort-Object -Unique).Count) files and selected $($paths.Count) package jobs."
+                foreach ($path in $paths) {
+                  $entries += New-MatrixEntry (Get-Item -LiteralPath $path) $false
+                }
+              }
+            } else {
+              # Scheduled and manual runs remain the complete inventory sweep.
+              Save-WorkflowMatrix
+              $obj = Get-Content -LiteralPath .matrix -Raw | ConvertFrom-Json
+              $entries = @($obj.include)
+            }
 
             foreach ($entry in @($entries | Where-Object { -not [bool]$_.verified_downloads -or -not [bool]$_.publish_eligible })) {
-              Write-Output "::warning file=$($entry.package),title=Package quarantined::$($entry.unverified_download_reason)"
+              Write-Output "::warning file=$($entry.package),title=Package quarantined::$($entry.quarantine_reason)"
             }
             $entries = @($entries | Where-Object { [bool]$_.verified_downloads -and [bool]$_.publish_eligible })
 
@@ -124,8 +180,9 @@ jobs:
             $entries = @($entries | Where-Object {
               $tier = if ($_.tier) { [string]$_.tier } else { 'tooling' }
               $baseName = [IO.Path]::GetFileNameWithoutExtension([string]$_.package)
-              $matchesRef = $env:GITHUB_REF_NAME -and (
-                $env:GITHUB_REF_NAME -eq $baseName -or $env:GITHUB_REF_NAME.StartsWith("$baseName-")
+              $normalizedRefName = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME -replace '^.*/', '' } else { '' }
+              $matchesRef = $normalizedRefName -and (
+                $normalizedRefName -eq $baseName -or $normalizedRefName.StartsWith("$baseName-")
               )
 
               if (-not $isProtectedRelease) {
@@ -210,10 +267,9 @@ jobs:
             Clear-TlcPackageScript
             & $script.FullName
             Test-TlcPackageScript
-            $verified = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
-            if (-not $verified) {
-              $reason = [string]$TlcPackageConfig.UnverifiedDownloadReason
-              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $reason"
+            $publicationState = Get-TlcPackagePublicationState
+            if (-not $publicationState.PublishEligible) {
+              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $($publicationState.QuarantineReason)"
               $quarantined += $TlcPackageConfig.Name
             }
           }
@@ -231,10 +287,9 @@ jobs:
             Clear-TlcPackageScript
             & $script.FullName
             Test-TlcPackageScript
-            $verified = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
-            if (-not $verified) {
-              $reason = [string]$TlcPackageConfig.UnverifiedDownloadReason
-              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $reason"
+            $publicationState = Get-TlcPackagePublicationState
+            if (-not $publicationState.PublishEligible) {
+              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $($publicationState.QuarantineReason)"
               $quarantined += $TlcPackageConfig.Name
             }
           }
@@ -243,8 +298,8 @@ jobs:
 
   scanner-smoke:
     name: Scanner bootstrap (${{ matrix.name }})
-    needs: [validate]
-    if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) }}
+    needs: [init, validate]
+    if: ${{ github.event_name != 'pull_request' && needs.init.outputs.has-packages == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -300,7 +355,7 @@ jobs:
         if: matrix.verified_downloads != true || matrix.publish_eligible != true
         shell: pwsh
         env:
-          QUARANTINE_REASON: ${{ matrix.unverified_download_reason }}
+          QUARANTINE_REASON: ${{ matrix.quarantine_reason }}
         run: |
           throw "Package is quarantined from CI builds/publication: $env:QUARANTINE_REASON"
 
@@ -439,7 +494,7 @@ jobs:
         if: matrix.verified_downloads != true || matrix.publish_eligible != true
         shell: pwsh
         env:
-          QUARANTINE_REASON: ${{ matrix.unverified_download_reason }}
+          QUARANTINE_REASON: ${{ matrix.quarantine_reason }}
         run: |
           throw "Package is quarantined from CI builds: $env:QUARANTINE_REASON"
 
@@ -521,7 +576,7 @@ jobs:
         if: matrix.verified_downloads != true || matrix.publish_eligible != true
         shell: pwsh
         env:
-          QUARANTINE_REASON: ${{ matrix.unverified_download_reason }}
+          QUARANTINE_REASON: ${{ matrix.quarantine_reason }}
         run: |
           throw "Package is quarantined from publication: $env:QUARANTINE_REASON"
 
@@ -686,6 +741,7 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           version: v0.73.0
           cache: true
           timeout: 30m
@@ -792,9 +848,8 @@ jobs:
 
       - name: Install verified Cosign
         if: steps.pkg.outputs.up-to-date == 'False'
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v2.6.0
+        shell: pwsh
+        run: .\.github\scripts\Install-VerifiedCosign.ps1
 
       - name: Publish tested image to a unique staging digest
         id: publish
@@ -804,7 +859,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $safeVersion = '${{ steps.pkg.outputs.version }}'.Replace('+','_')
           $finalTag = "${env:TLC_DOCKER_REPO}:${{ steps.pkg.outputs.name }}-$safeVersion"
-          $stagingTag = "${env:TLC_DOCKER_REPO}:staging-${{ steps.pkg.outputs.name }}-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $stagingTagName = "staging-${{ steps.pkg.outputs.name }}-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $stagingTag = "${env:TLC_DOCKER_REPO}:$stagingTagName"
 
           docker manifest inspect $finalTag *> $null
           if ($LASTEXITCODE -eq 0) { throw "Refusing to overwrite immutable package tag: $finalTag" }
@@ -825,6 +881,7 @@ jobs:
           $repoDigest = "$env:TLC_DOCKER_REPO@$remoteDigest"
 
           "staging-tag=$stagingTag" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "staging-tag-name=$stagingTagName" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "final-tag=$finalTag" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "digest-ref=$repoDigest" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "digest=$(($repoDigest -split '@',2)[1])" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -888,6 +945,20 @@ jobs:
             throw "Final tag digest '$finalDigest' differs from signed staging digest '$env:SIGNED_DIGEST'."
           }
           Write-Host "Promoted signed digest $finalDigest to $env:FINAL_TAG"
+
+      - name: Remove successful staging tag
+        if: steps.pkg.outputs.up-to-date == 'False'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          STAGING_TAG_NAME: ${{ steps.publish.outputs.staging-tag-name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./.github/scripts/Remove-DockerHubStagingTags.ps1 `
+            -Repository $env:TLC_DOCKER_REPO `
+            -Tag $env:STAGING_TAG_NAME
 
       - name: Upload release evidence
         if: always() && steps.pkg.outputs.up-to-date == 'False'

@@ -22,7 +22,7 @@ Small local model seed packages are available as separate refs so consumers can 
 
 Model packages seed Hugging Face cache content under `cache/hf-cache` and write `LOCAL_CODEX_MODEL_MANIFEST`, `LOCAL_CODEX_HF_CACHE_SEED`, and `LOCAL_CODEX_OFFICIAL_MODEL` into the `.tlc` environment. Generic model packages download only common model/runtime files by default; package descriptors can pass custom `AllowPatterns` when a repository needs a different file set. Generic model packages also generate layered Dockerfiles so Hugging Face refs, snapshots, and individual blobs can be cached independently by Docker. Set `HF_TOKEN` for private or gated Hugging Face repositories before building.
 
-Package scripts can declare `TlcPackageConfig.Tier` as `tooling`, `model-small`, or `model-large`. Pull requests validate all descriptors and run secret-free Windows/Linux smoke builds for representative and changed publish-eligible packages. Pushes to `main` include tooling plus small models; schedules and manual workflow runs include large models, with large models isolated on the self-hosted `toolchains-large` runner. Pull requests never execute large-model package code on self-hosted runners.
+Package scripts can declare `TlcPackageConfig.Tier` as `tooling`, `model-small`, or `model-large`. Pull requests validate all descriptors and run secret-free Windows/Linux smoke builds for representative and changed publish-eligible packages. Pushes select directly changed package scripts and a bounded Windows/Linux or package-family smoke set when shared infrastructure changes; documentation-only pushes do not start package publication jobs. On `main`, selected tooling and small-model packages are eligible, while scheduled and manual workflow runs retain the complete inventory sweep. Large models remain isolated on the self-hosted `toolchains-large` runner and run only for schedules, manual workflows, or a focused package release ref. Pull requests never execute large-model package code on self-hosted runners.
 
 After a successful or no-op release on `main`, an unprivileged job derives model package names from the explicit model tiers and passes a names-only plan to a fresh publisher job. The publisher writes a complete generation using `tlc-kind-model-v1-<generation>-<count>--<package>` tags (or `tlc-kind-model-v1-<generation>-0--empty`). Toolchain uses the highest complete generation, so partial propagation is ignored and older generations can remain safely in place. Package names may not contain the reserved `--` separator.
 
@@ -54,6 +54,14 @@ Desktop installer: the command downloads the selected release directly from
 Docker and verifies its published SHA-256 and Docker Inc. Authenticode
 signature before execution. Use `-AllUsers` to request the elevated all-user
 installation or `-DownloadOnly` to verify the installer without running it.
+
+`toolchain load podman` installs Podman's Windows CLI plus the networking and
+SSH proxy helpers used by Podman Machine. Toolchains rebuilds them from
+checksum-database-verified Go modules with its pinned patched Go toolchain; the
+upstream Windows bundle is not republished while it contains HIGH findings. The
+package does not modify WSL, install a system service, or create a virtual
+machine. On a compatible Windows host, initialize the runtime explicitly with
+`podman machine init`, then start it with `podman machine start`.
 
 Use the helper script on a Linux host/runner:
 
@@ -131,8 +139,10 @@ use the SHA-256 digest returned by GitHub's release API, and Node.js archives us
 the release's official `SHASUMS256.txt` when installed through
 `Install-BuildTool`.
 
-Workflow matrix entries expose `verified_downloads`, `publish_eligible`, and
-`unverified_download_reason`. Packages without independent publisher provenance
-must set `VerifiedDownloads = $false` and a reason; they are not eligible for
-production publication. NASM is currently the only quarantined package because
-its Windows archive is published without a supported checksum or signature.
+Workflow matrix entries expose `verified_downloads`, `publish_eligible`, and a
+`quarantine_reason`. Packages without independent publisher provenance must set
+`VerifiedDownloads = $false` and a reason; packages blocked for a separate
+security or lifecycle concern set `PublishEligible = $false` and a publication
+block reason. Both are excluded before production builds begin. Docker, NASM,
+and zstd are currently provenance-quarantined, while Node 24 is temporarily
+security-quarantined until its upstream archive contains a patched npm bundle.

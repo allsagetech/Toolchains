@@ -9,8 +9,9 @@ Toolchains releases use immutable artifact promotion:
 5. run Toolchain compatibility contracts against the same digest;
 6. publish or promote that digest without rebuilding;
 7. sign the digest and attach provenance;
-8. verify the registry digest, signature, SBOM, and provenance after publication.
-9. after the complete release matrix succeeds (or a validated no-op run), publish a complete generational model catalog from explicit package tiers.
+8. verify the registry digest, signature, SBOM, and provenance after publication;
+9. remove the successful run's temporary `staging-*` tag through Docker Hub's tag-specific API;
+10. after the complete release matrix succeeds (or a validated no-op run), publish a complete generational model catalog from explicit package tiers.
 
 Failure or unavailability of a required scanner, signer, contract, or provenance step blocks promotion. Release jobs run only from protected refs and environments. OIDC and registry credentials are scoped to the signing and publishing jobs.
 
@@ -23,7 +24,14 @@ is best-effort after a primary failure so a missing secondary artifact does not
 hide the original cause. The final `package-health.json` artifact provides the
 result and job URL for every selected package.
 
-Packages marked `VerifiedDownloads = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification or intentionally remove the package; quarantine never converts an unverified download into an approved release input.
+Packages marked `VerifiedDownloads = $false` or `PublishEligible = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification, wait for an upstream security fix, or intentionally remove the package; quarantine never converts an unverified or vulnerable input into an approved release artifact.
+
+The unique `staging-*` tag makes a candidate addressable by digest for signing
+and verification without exposing its immutable version tag early. It is
+deleted only after the final version tag is proven to reference that signed
+digest. A scheduled cleanup removes old staging tags left by failed or canceled
+runs. Cleanup uses Docker Hub's tag endpoint and never deletes registry
+manifests, which may still be shared by final tags.
 
 For rollback, move a mutable convenience tag only after selecting a previously verified immutable digest. Never overwrite a version tag.
 
