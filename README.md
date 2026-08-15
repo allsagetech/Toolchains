@@ -40,8 +40,10 @@ Toolchain's local cluster commands use these integrity-checked package pairs:
 - `k9s` on Windows and `k9s-linux` on Linux
 
 The kind and k3d packages are provisioned automatically when a matching cluster
-provider executable is not already on `PATH`. K9s is provisioned automatically
-by `toolchain k9s` when it is not already on `PATH`. Kubectl remains opt-in with
+provider executable is not already on `PATH`. K9s 0.51.0 is rebuilt from
+checksum-database-verified Go source with a patched Go toolchain and dependency
+graph, and is provisioned automatically by `toolchain k9s` when it is not
+already on `PATH`. Kubectl remains opt-in with
 `toolchain load kubectl` (or `kubectl-linux` on Linux). Docker Engine and
 Kubernetes node container images are intentionally not bundled into these
 packages.

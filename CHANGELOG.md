@@ -12,6 +12,7 @@
 ### Security
 
 - Verify downloaded package inputs and cache hits before execution.
+- Rebuild K9s 0.51.0 for Windows and Linux from checksum-database-verified Go modules with a patched Go toolchain and dependency graph.
 - Rebuild kubectl for Windows and Linux from checksum-verified Go modules with patched Go, `x/net`, `x/sys`, and `x/text` dependencies.
 - Rebuild Cue and Helm from checksum-verified Go modules with fixed `x/text` and `oras-go` dependencies, and quarantine Node 24 until its upstream npm bundle clears HIGH/CRITICAL findings.
 - Exclude caches and temporary build content from published images.

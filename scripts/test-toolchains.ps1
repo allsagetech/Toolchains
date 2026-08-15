@@ -492,6 +492,26 @@ function Test-ProductionReadinessPolicies {
 	}
 	Assert-True ($familyText -match "GoToolchain = 'go1.26.6'") 'Shared kubectl source build does not pin the fixed Go toolchain.'
 	Assert-True ($familyText -match 'BuildRevision = 1') 'Shared kubectl source build does not carry a republishable package revision.'
+	foreach ($patchedModule in @(
+		@{ Module = 'github.com/containerd/containerd'; Version = 'v1.7.33' },
+		@{ Module = 'github.com/containerd/containerd/v2'; Version = 'v2.2.5' },
+		@{ Module = 'github.com/go-git/go-git/v5'; Version = 'v5.19.2' },
+		@{ Module = 'golang.org/x/crypto'; Version = 'v0.53.0' },
+		@{ Module = 'golang.org/x/net'; Version = 'v0.56.0' },
+		@{ Module = 'golang.org/x/text'; Version = 'v0.39.0' },
+		@{ Module = 'google.golang.org/grpc'; Version = 'v1.82.1' },
+		@{ Module = 'oras.land/oras-go/v2'; Version = 'v2.6.2' }
+	)) {
+		Assert-True ($familyText -match [regex]::Escape($patchedModule.Module)) "Shared K9s source build omits dependency: $($patchedModule.Module)"
+		Assert-True ($familyText -match [regex]::Escape($patchedModule.Version)) "Shared K9s source build does not pin $($patchedModule.Module) to $($patchedModule.Version)."
+	}
+	Assert-True ($familyText -match 'Initialize-TlcK9sPackage[\s\S]+?BuildRevision = 1[\s\S]+?Invoke-TlcVerifiedGoCommandBuild') 'Shared K9s source build does not carry a republishable package revision.'
+	Assert-True ($familyText -match "UpstreamVersion = '0\.51\.0'") 'Shared K9s source build does not pin upstream v0.51.0.'
+	Assert-True ($familyText -match "UpstreamCommit = '558caafe7ba067467de46b320cc22ef11fef9c34'") 'Shared K9s source build does not pin the v0.51.0 commit.'
+	foreach ($k9sScript in @('.\src\pkgs\k9s.ps1', '.\src\pkgs\k9s-linux.ps1')) {
+		$k9sText = Get-Content -LiteralPath $k9sScript -Raw
+		Assert-True ($k9sText -match 'Initialize-TlcK9sPackage') "$k9sScript bypasses the shared verified source build."
+	}
 	$cueText = Get-Content -LiteralPath .\src\pkgs\cue.ps1 -Raw
 	Assert-True ($cueText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Cue still packages the vulnerable upstream binary.'
 	Assert-True ($cueText -match "PatchedTextVersion = 'v0\.39\.0'") 'Cue does not require the fixed golang.org/x/text version.'

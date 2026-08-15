@@ -130,46 +130,54 @@ function Initialize-TlcK9sPackage {
 
 	$global:TlcPackageConfig = @{
 		Name = $Name
+		BuildRevision = 1
+		GoToolchain = 'go1.26.6'
+		UpstreamVersion = '0.51.0'
+		UpstreamCommit = '558caafe7ba067467de46b320cc22ef11fef9c34'
+		UpstreamDate = '2026-06-06T05:22:55Z'
+		PatchedContainerdVersion = 'v1.7.33'
+		PatchedContainerdV2Version = 'v2.2.5'
+		PatchedGoGitVersion = 'v5.19.2'
+		PatchedCryptoVersion = 'v0.53.0'
+		PatchedNetVersion = 'v0.56.0'
+		PatchedTextVersion = 'v0.39.0'
+		PatchedGrpcVersion = 'v1.82.1'
+		PatchedOrasVersion = 'v2.6.2'
 		IsLinux = [bool]$Linux
 	}
 	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
 
 	function global:Install-TlcPackage {
-		$assetPattern = if ($TlcPackageConfig.IsLinux) {
-			'^k9s_Linux_amd64\.tar\.gz$'
-		} else {
-			'^k9s_Windows_amd64\.zip$'
-		}
-		$asset = Get-GitHubRelease `
-			-Owner 'derailed' `
-			-Repo 'k9s' `
-			-AssetPattern $assetPattern `
-			-TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
-
-		$TlcPackageConfig.Version = $asset.Version.ToString()
-		$TlcPackageConfig.UpToDate = -not $asset.Version.LaterThan($TlcPackageConfig.Latest)
+		$packageVersion = [TlcSemanticVersion]::new("$($TlcPackageConfig.UpstreamVersion)+$($TlcPackageConfig.BuildRevision)")
+		$TlcPackageConfig.Version = $packageVersion.ToString()
+		$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
 		if ($TlcPackageConfig.UpToDate) { return }
-
-		$checksumUri = "https://github.com/derailed/k9s/releases/download/$($asset.Identifier)/checksums.sha256"
-		$expectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $checksumUri -AssetName $asset.Name -Headers (Get-TlcGitHubHeaders)
-		$stagingRoot = Get-TlcStagingPath 'k9s'
-		New-Item -Path $stagingRoot -ItemType Directory -Force | Out-Null
-		$archivePath = Join-Path $stagingRoot $asset.Name
-		Invoke-TlcWebRequest -Uri $asset.URL -OutFile $archivePath -ExpectedSha256 $expectedSha256 | Out-Null
 
 		$pkgRoot = Get-TlcPkgRoot
 		New-Item -Path $pkgRoot -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-		if ($TlcPackageConfig.IsLinux) {
-			$tar = Get-TlcApplicationPath -Name 'tar'
-			& $tar '-xzf' $archivePath '-C' $pkgRoot
-			if ($LASTEXITCODE -ne 0) { throw "failed to extract $($asset.Name) with exit code $LASTEXITCODE" }
-		} else {
-			Expand-Archive -LiteralPath $archivePath -DestinationPath $pkgRoot -Force
-		}
-
 		$outputName = if ($TlcPackageConfig.IsLinux) { 'k9s' } else { 'k9s.exe' }
 		$executable = Get-TlcPkgPath $outputName
-		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "K9s archive did not contain $outputName" }
+		$minimumModules = @{
+			'github.com/containerd/containerd' = $TlcPackageConfig.PatchedContainerdVersion
+			'github.com/containerd/containerd/v2' = $TlcPackageConfig.PatchedContainerdV2Version
+			'github.com/go-git/go-git/v5' = $TlcPackageConfig.PatchedGoGitVersion
+			'golang.org/x/crypto' = $TlcPackageConfig.PatchedCryptoVersion
+			'golang.org/x/net' = $TlcPackageConfig.PatchedNetVersion
+			'golang.org/x/text' = $TlcPackageConfig.PatchedTextVersion
+			'google.golang.org/grpc' = $TlcPackageConfig.PatchedGrpcVersion
+			'oras.land/oras-go/v2' = $TlcPackageConfig.PatchedOrasVersion
+		}
+		$ldflags = "-s -w -X github.com/derailed/k9s/cmd.version=v$($TlcPackageConfig.UpstreamVersion) -X github.com/derailed/k9s/cmd.commit=$($TlcPackageConfig.UpstreamCommit) -X github.com/derailed/k9s/cmd.date=$($TlcPackageConfig.UpstreamDate)"
+		Invoke-TlcVerifiedGoCommandBuild `
+			-Module 'github.com/derailed/k9s' `
+			-Version "v$($TlcPackageConfig.UpstreamVersion)" `
+			-Command 'github.com/derailed/k9s' `
+			-OutputPath $executable `
+			-MinimumModules $minimumModules `
+			-GoToolchain $TlcPackageConfig.GoToolchain `
+			-LdFlags $ldflags
+
+		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "patched K9s source build did not produce $outputName" }
 		if ($TlcPackageConfig.IsLinux) {
 			& chmod '+x' $executable
 			if ($LASTEXITCODE -ne 0) { throw 'failed to mark k9s executable' }
