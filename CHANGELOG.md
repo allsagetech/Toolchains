@@ -20,7 +20,7 @@
 ### Changed
 
 - Clean abandoned Docker Hub staging tags and orphaned Cosign attachments with dry-run previews, a publication safety delay, race-free release concurrency, and pagination resilient to Docker Hub's delayed tag-count refresh.
-- Disable large-model publication jobs and replace hanging Cosign verification with asynchronously drained subprocesses plus internal, process-tree, and GitHub step deadlines.
+- Disable large-model publication jobs and replace hanging live transparency-log lookups with offline verification of Cosign's signed Rekor bundles, file-backed subprocess output, and bounded internal, process, and GitHub step deadlines.
 - Make manual package publishing targeted by default, require explicit full-inventory opt-in, preserve shared runner capacity with bounded release parallelism, and bound Cosign verification with timeouts and retries.
 - Route push publication jobs from changed package and asset paths, use bounded representatives for shared infrastructure, and reserve automatic complete inventory sweeps for scheduled runs.
 - Normalize package `path` definitions to the case-sensitive Linux `PATH` variable during local execution.

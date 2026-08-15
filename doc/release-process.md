@@ -28,8 +28,10 @@ Manual workflow runs are package-targeted by default. Supply a package base name
 such as `podman` or a repository-relative script path such as
 `src/pkgs/podman.ps1`. A complete manual sweep requires explicitly enabling
 `full_inventory`. Release matrices run at most eight package jobs concurrently,
-and each Cosign verification command has bounded retries plus both an internal
-and an external timeout so registry or transparency-log latency cannot occupy a
+and each Cosign verification command validates the signed Rekor inclusion bundle
+offline, including the Fulcio certificate, claims, issuer, and workflow identity.
+File-backed command output, bounded retries, and internal, external, and job-level
+timeouts prevent registry latency or a stuck child process from occupying a
 runner indefinitely.
 
 Packages marked `VerifiedDownloads = $false` or `PublishEligible = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification, wait for an upstream security fix, or intentionally remove the package; quarantine never converts an unverified or vulnerable input into an approved release artifact.
