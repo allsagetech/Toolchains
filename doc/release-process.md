@@ -38,8 +38,11 @@ The unique `staging-*` tag makes a candidate addressable by digest for signing
 and verification without exposing its immutable version tag early. It is
 deleted only after the final version tag is proven to reference that signed
 digest. A scheduled cleanup removes old staging tags left by failed or canceled
-runs. Cleanup uses Docker Hub's tag endpoint and never deletes registry
-manifests, which may still be shared by final tags.
+runs and Cosign `.sig`/`.att` attachments whose subject digest has no durable
+non-staging tag. A safety delay and shared publication concurrency protect
+in-flight releases. Manual cleanup previews changes by default. Cleanup uses
+Docker Hub's tag endpoint and never deletes registry manifests or attachments
+whose digest is still referenced by a final tag.
 
 For rollback, move a mutable convenience tag only after selecting a previously verified immutable digest. Never overwrite a version tag.
 
