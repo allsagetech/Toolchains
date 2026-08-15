@@ -6,6 +6,8 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'kind-linux'
+	CanonicalName = 'kind'
+	Platform = 'linux/amd64'
 	RunsOn = 'ubuntu-22.04'
 	GoToolchain = 'go1.26.6'
 }

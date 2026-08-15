@@ -260,8 +260,8 @@ function Test-ModelCategoryMarkers {
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
 	Assert-True ($workflowText -match '(?m)^  model-category-marker-plan:') 'Release workflow does not define the unprivileged model marker plan job.'
 	Assert-True ($workflowText -match '(?m)^  model-category-markers:') 'Release workflow does not define the model category marker job.'
-	$planJobText = [regex]::Match($workflowText, '(?ms)^  model-category-marker-plan:.*?(?=^  model-category-markers:)').Value
-	$publisherJobText = [regex]::Match($workflowText, '(?ms)^  model-category-markers:.*\z').Value
+	$planJobText = [regex]::Match($workflowText, '(?ms)^  model-category-marker-plan:.*?(?=^  [a-zA-Z0-9_-]+:|\z)').Value
+	$publisherJobText = [regex]::Match($workflowText, '(?ms)^  model-category-markers:.*?(?=^  [a-zA-Z0-9_-]+:|\z)').Value
 	Assert-True ($planJobText -match 'export-model-category-marker-plan\.ps1' -and $planJobText -match 'upload-artifact@') 'Plan job does not export and upload its names-only artifact.'
 	Assert-True ($planJobText -notmatch 'DOCKERHUB_|login-action@|environment:\s*package-release') 'Unprivileged plan job is exposed to release credentials.'
 	Assert-True ($planJobText -match "github\.ref == 'refs/heads/main'") 'Authoritative marker planning is not limited to main.'
@@ -364,12 +364,14 @@ function Test-ProductionReadinessPolicies {
 		Assert-True (-not [bool]$TlcPackageConfig.VerifiedDownloads) "$quarantinedScript is not quarantined despite missing publisher provenance metadata."
 		Assert-True (-not [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) "$quarantinedScript quarantine does not explain the provenance gap."
 	}
-	Clear-TlcPackageScript
-	. .\src\pkgs\node\node24.ps1
-	$node24Publication = Get-TlcPackagePublicationState
-	Assert-True $node24Publication.VerifiedDownloads 'Node 24 security quarantine incorrectly marks its verified upstream archive unverified.'
-	Assert-True (-not $node24Publication.PublishEligible) 'Node 24 can publish despite active HIGH/CRITICAL findings in its upstream npm bundle.'
-	Assert-True (-not [string]::IsNullOrWhiteSpace($node24Publication.QuarantineReason)) 'Node 24 security quarantine has no explanation.'
+	foreach ($nodeMajor in @(22, 24)) {
+		Clear-TlcPackageScript
+		. ".\src\pkgs\node\node$nodeMajor.ps1"
+		$nodePublication = Get-TlcPackagePublicationState
+		Assert-True $nodePublication.VerifiedDownloads "Node $nodeMajor security quarantine incorrectly marks its verified upstream archive unverified."
+		Assert-True (-not $nodePublication.PublishEligible) "Node $nodeMajor can publish despite active HIGH/CRITICAL findings in its upstream npm bundle."
+		Assert-True (-not [string]::IsNullOrWhiteSpace($nodePublication.QuarantineReason)) "Node $nodeMajor security quarantine has no explanation."
+	}
 	$sevenZipPackageText = Get-Content -LiteralPath .\src\pkgs\7-zip.ps1 -Raw
 	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'
 	$doxygenPackageText = Get-Content -LiteralPath .\src\pkgs\doxygen.ps1 -Raw
@@ -806,6 +808,25 @@ function Test-UpstreamMetadataParsers {
 	Write-Host 'Validated machine-readable and fixture-backed upstream metadata parsers.'
 }
 
+function Test-PlatformIndexMigrationPlan {
+	$tempPath = Join-Path ([IO.Path]::GetTempPath()) ("toolchains-platform-plan-$([Guid]::NewGuid().ToString('n')).json")
+	try {
+		& .\scripts\export-platform-index-plan.ps1 -OutputPath $tempPath -Repository 'owner/repo' -Tags @(
+			'kubectl-1.34.0_1',
+			'kubectl-linux-1.34.0_1'
+		)
+		$plan = Get-Content -LiteralPath $tempPath -Raw | ConvertFrom-Json
+		$entry = @($plan.indexes | Where-Object target -eq 'owner/repo:kubectl-1.34.0_1')
+		Assert-True ($entry.Count -eq 1) 'First-run platform migration did not plan the existing kubectl pair.'
+		Assert-True (@($entry[0].sources) -contains 'owner/repo:kubectl-1.34.0_1') 'Platform migration omitted the existing Windows durable tag.'
+		Assert-True (@($entry[0].sources) -contains 'owner/repo:kubectl-linux-1.34.0_1') 'Platform migration omitted the existing Linux durable tag.'
+		Assert-True (@($entry[0].leafTags).Count -eq 2) 'Platform migration did not seed two immutable platform leaves.'
+	} finally {
+		if (Test-Path -LiteralPath $tempPath -PathType Leaf) { Remove-Item -LiteralPath $tempPath -Force }
+	}
+	Write-Host 'Validated first-run multi-platform index migration.'
+}
+
 Test-PowerShellSyntax
 Test-WebRequestUserAgent
 Test-PackageScripts
@@ -814,6 +835,7 @@ Test-ModelCategoryMarkers
 Test-HuggingFaceHelpers
 Test-HuggingFaceLayeredDockerfile
 Test-UpstreamMetadataParsers
+Test-PlatformIndexMigrationPlan
 Test-WorkflowRunnerDefaults
 Test-ProductionReadinessPolicies
 Test-AtomicVerifiedDownloads

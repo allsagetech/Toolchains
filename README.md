@@ -39,6 +39,11 @@ Toolchain's local cluster commands use these integrity-checked package pairs:
 - `kubectl` on Windows and `kubectl-linux` on Linux
 - `k9s` on Windows and `k9s-linux` on Linux
 
+Release automation also publishes signed OCI indexes under the canonical names,
+so current clients can use `kind`, `k3d`, `kubectl`, and `k9s` on either
+platform. The `-linux` names remain compatibility aliases and are hidden from
+Toolchain's default remote display after their canonical index marker exists.
+
 The kind and k3d packages are provisioned automatically when a matching cluster
 provider executable is not already on `PATH`. K9s 0.51.0 is rebuilt from
 checksum-database-verified Go source with a patched Go toolchain and dependency
@@ -103,6 +108,19 @@ Package authors must follow the lifecycle, checksum, package-root, and configura
 
 The repository and workflow boundaries are summarized in [`doc/architecture.md`](doc/architecture.md). Every publication run uploads `package-health.json` and writes a per-package Actions summary so scanner infrastructure failures, vulnerability findings, and package lifecycle failures can be distinguished without opening every matrix job.
 
+Each successful main publication also produces a signed `tlc-catalog-v1` OCI
+health catalog. Toolchain exposes it through `tlc remote health` and
+`tlc remote info`. A weekly rescan checks the latest durable version of each
+publish-eligible descriptor and can mark packages `scan-blocked` without
+weakening the original immutable release evidence. A separate certification
+workflow exercises clean Windows PowerShell 5.1, Windows PowerShell 7, Linux
+PowerShell 7, and scheduled local-cluster smoke tests.
+
+The catalog additionally contains Windows/Linux packages for Cosign, ORAS,
+Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal. Shared
+GitHub-release package logic requires an upstream SHA-256 digest or checksum
+asset before any downloaded executable can enter a candidate image.
+
 The package-definition schema and fixtures in `schema/` are a vendored copy of the versioned Toolchain contract. Validate them with `scripts/test-package-spec.ps1`; update them from a canonical checkout with `scripts/update-package-spec.ps1`. A scheduled workflow downloads the latest immutable Toolchain contract artifact and opens an automated synchronization PR when those files change.
 
 See [`SECURITY.md`](SECURITY.md) for vulnerability reporting and release supply-chain requirements, and [`CHANGELOG.md`](CHANGELOG.md) for pending user-visible changes.
@@ -150,8 +168,9 @@ Workflow matrix entries expose `verified_downloads`, `publish_eligible`, and a
 `VerifiedDownloads = $false` and a reason; packages blocked for a separate
 security or lifecycle concern set `PublishEligible = $false` and a publication
 block reason. Both are excluded before production builds begin. Docker, NASM,
-and zstd are currently provenance-quarantined, while Node 24 is temporarily
-security-quarantined until its upstream archive contains a patched npm bundle.
+and zstd are currently provenance-quarantined, while Node 22 and Node 24 are
+temporarily security-quarantined until their upstream archives contain patched
+npm bundles.
 The scheduled Docker Hub maintenance job removes tags selected by quarantined
 descriptors and deletes their Cosign attachments only when no durable tag still
 references the same digest. Manual cleanup runs default to a non-destructive preview.

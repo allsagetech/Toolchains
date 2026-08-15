@@ -687,6 +687,8 @@ jobs:
           "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "vex=$([string]$TlcPackageConfig.Vex)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "canonical-name=$([string]$TlcPackageConfig.CanonicalName)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "platform=$([string]$TlcPackageConfig.Platform)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Scan Windows package payload
         if: runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False'
@@ -1053,6 +1055,22 @@ jobs:
             -Repository $env:TLC_DOCKER_REPO `
             -Tag $env:STAGING_TAG_NAME
 
+      - name: Publish platform leaf alias
+        if: steps.pkg.outputs.up-to-date == 'False' && steps.pkg.outputs.canonical-name != '' && steps.pkg.outputs.platform != ''
+        shell: pwsh
+        env:
+          CANONICAL_NAME: ${{ steps.pkg.outputs.canonical-name }}
+          PLATFORM: ${{ steps.pkg.outputs.platform }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+          DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $safeVersion = $env:VERSION.Replace('+', '_')
+          $platformSlug = $env:PLATFORM.Replace('/', '-')
+          $leafTag = "$env:TLC_DOCKER_REPO`:tlc-platform-v1-$platformSlug--$env:CANONICAL_NAME--$safeVersion"
+          docker buildx imagetools create --prefer-index=false --tag $leafTag $env:DIGEST_REF
+          if ($LASTEXITCODE -ne 0) { throw "failed to publish platform leaf alias $leafTag" }
+
       - name: Upload release evidence
         if: always() && steps.pkg.outputs.up-to-date == 'False'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1176,6 +1194,140 @@ jobs:
           path: ${{ runner.temp }}/model-category-marker-plan/model-category-marker-plan.json
           if-no-files-found: error
           retention-days: 1
+
+  platform-index-plan:
+    name: Plan multi-platform package indexes
+    needs: [init, validate, release]
+    if: ${{ always() && needs.init.result == 'success' && needs.validate.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Export platform index plan
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'platform-index-plan'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          ./scripts/export-platform-index-plan.ps1 -OutputPath (Join-Path $directory 'plan.json') -Repository $env:TLC_DOCKER_REPO
+
+      - name: Upload platform index plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-index-plan
+          path: ${{ runner.temp }}/platform-index-plan/plan.json
+          if-no-files-found: error
+          retention-days: 1
+
+  platform-indexes:
+    name: Publish multi-platform package indexes
+    needs: [platform-index-plan]
+    if: ${{ needs.platform-index-plan.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: package-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download platform index plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: platform-index-plan
+          path: ${{ runner.temp }}/platform-index-plan
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true
+      - name: Install verified Cosign
+        shell: pwsh
+        run: ./.github/scripts/Install-VerifiedCosign.ps1
+      - name: Publish and sign indexes
+        shell: pwsh
+        run: ./scripts/publish-platform-indexes.ps1 -PlanPath '${{ runner.temp }}/platform-index-plan/plan.json'
+
+  health-catalog-plan:
+    name: Plan signed package health catalog
+    needs: [init, validate, release, platform-indexes]
+    if: ${{ always() && needs.init.result == 'success' && needs.validate.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.platform-indexes.result == 'success' || needs.platform-indexes.result == 'skipped') && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate health catalog
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'health-catalog-plan'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          ./scripts/new-package-health-catalog.ps1 -OutputPath (Join-Path $directory 'catalog.json') -Repository $env:TLC_DOCKER_REPO
+      - name: Upload health catalog plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: health-catalog-plan
+          path: ${{ runner.temp }}/health-catalog-plan/catalog.json
+          if-no-files-found: error
+          retention-days: 1
+
+  health-catalog:
+    name: Publish signed package health catalog
+    needs: [health-catalog-plan]
+    if: ${{ needs.health-catalog-plan.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: package-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download health catalog plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: health-catalog-plan
+          path: ${{ runner.temp }}/health-catalog-plan
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true
+      - name: Install verified Cosign
+        shell: pwsh
+        run: ./.github/scripts/Install-VerifiedCosign.ps1
+      - name: Publish signed catalog
+        shell: pwsh
+        run: ./scripts/publish-package-health-catalog.ps1 -Repository $env:TLC_DOCKER_REPO -CatalogPath '${{ runner.temp }}/health-catalog-plan/catalog.json'
+      - name: Remove health catalog staging tag
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          STAGING_TAG_NAME: staging-health-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          ./.github/scripts/Remove-DockerHubStagingTags.ps1 `
+            -Repository $env:TLC_DOCKER_REPO `
+            -Tag $env:STAGING_TAG_NAME
 
   model-category-markers:
     name: Publish model category markers

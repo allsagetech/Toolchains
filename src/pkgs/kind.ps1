@@ -6,6 +6,8 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'kind'
+	CanonicalName = 'kind'
+	Platform = 'windows/amd64'
 	GoToolchain = 'go1.26.6'
 }
 

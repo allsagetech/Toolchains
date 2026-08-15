@@ -1,0 +1,102 @@
+# Toolchains | SPDX-License-Identifier: MPL-2.0
+name: Certify Published Packages
+
+on:
+  workflow_run:
+    workflows: ['Build Toolchain Packages']
+    types: [completed]
+  schedule:
+    - cron: '41 6 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchains-published-certification
+  cancel-in-progress: false
+
+env:
+  TOOLCHAIN_REPO: allsagetech/toolchain
+  TOOLCHAIN_REF: 581d176d85371bbbff80d10432ebf5ad29b20435
+
+jobs:
+  package-contract:
+    name: Consumer (${{ matrix.name }})
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-powershell-5.1
+            os: windows-2022
+            shell: powershell
+          - name: windows-powershell-7
+            os: windows-2022
+            shell: pwsh
+          - name: linux-powershell-7
+            os: ubuntu-22.04
+            shell: pwsh
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Toolchain consumer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/install-toolchain.ps1
+      - name: Pull, load, and execute an immutable package (PowerShell 7)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          Import-Module Toolchain -Force
+          tlc pull kubectl
+          tlc load kubectl
+          kubectl version --client
+          if ($LASTEXITCODE -ne 0) { throw 'kubectl consumer certification failed' }
+      - name: Pull, load, and execute an immutable package (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: |
+          Import-Module Toolchain -Force
+          tlc pull kubectl
+          tlc load kubectl
+          kubectl version --client
+          if ($LASTEXITCODE -ne 0) { throw 'kubectl consumer certification failed' }
+
+  cluster-smoke:
+    name: Cluster smoke (${{ matrix.provider }})
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        provider: [kind, k3s, k0s]
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Toolchain consumer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/install-toolchain.ps1
+      - name: Create, inspect, and delete cluster
+        shell: pwsh
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          Import-Module Toolchain -Force
+          $arguments = @('cluster', 'create', "cert-$env:PROVIDER", '-Provider', $env:PROVIDER, '-WaitSeconds', '300')
+          if ($env:PROVIDER -eq 'k0s') { $arguments += @('-Image', 'docker.io/k0sproject/k0s:v1.32.4-k0s.0') }
+          tlc @arguments
+          $state = tlc cluster status "cert-$env:PROVIDER"
+          if ($state.Status -ne 'Running') { throw "$env:PROVIDER cluster did not report Running" }
+          tlc cluster delete "cert-$env:PROVIDER"

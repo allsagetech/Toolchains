@@ -8,6 +8,9 @@
 - Add checksum-verified Windows and Linux K9s packages for the `toolchain k9s` cluster UI command.
 - Add a Windows Docker Desktop bootstrap package that discovers Docker's current release, downloads it directly from Docker, verifies its SHA-256 and Authenticode publisher, and keeps license acceptance explicit.
 - Add Windows Podman CLI and Podman Machine helpers rebuilt from checksum-verified source modules with patched Go and `x/crypto`, with no automatic host or VM configuration.
+- Add signed package-health catalog publication, weekly durable-tag rescans, and clean consumer/cluster certification workflows.
+- Add canonical signed multi-platform OCI indexes while retaining platform-specific compatibility aliases.
+- Add checksum-verified Windows and Linux packages for Cosign, ORAS, Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal.
 
 ### Security
 
@@ -15,6 +18,7 @@
 - Rebuild K9s 0.51.0 for Windows and Linux from checksum-database-verified Go modules with a patched Go toolchain and dependency graph.
 - Rebuild kubectl for Windows and Linux from checksum-verified Go modules with patched Go, `x/net`, `x/sys`, and `x/text` dependencies.
 - Rebuild Cue and Helm from checksum-verified Go modules with fixed `x/text` and `oras-go` dependencies, and quarantine Node 24 until its upstream npm bundle clears HIGH/CRITICAL findings.
+- Quarantine Node 22 after its current upstream npm bundle failed the HIGH/CRITICAL release gate.
 - Exclude caches and temporary build content from published images.
 - Fail closed when signing or compatibility contracts are required.
 - Reduce CI permissions and secret exposure to protected release jobs.

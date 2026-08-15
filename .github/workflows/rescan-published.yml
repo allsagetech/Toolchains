@@ -1,0 +1,179 @@
+# Toolchains | SPDX-License-Identifier: MPL-2.0
+name: Rescan Published Packages
+
+on:
+  schedule:
+    - cron: '19 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchains-published-rescan
+  cancel-in-progress: false
+
+env:
+  TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+
+jobs:
+  plan:
+    name: Plan durable package rescans
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has-packages: ${{ steps.plan.outputs.has-packages }}
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Export rescan matrix
+        id: plan
+        shell: pwsh
+        run: |
+          ./scripts/export-rescan-matrix.ps1 -OutputPath matrix.json -Repository $env:TLC_DOCKER_REPO
+          $document = Get-Content -LiteralPath matrix.json -Raw | ConvertFrom-Json
+          "matrix=$(Get-Content -LiteralPath matrix.json -Raw)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "has-packages=$([bool](@($document.include).Count -gt 0).ToString().ToLowerInvariant())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  scan:
+    name: Rescan (${{ matrix.id }})
+    needs: [plan]
+    if: ${{ needs.plan.outputs.has-packages == 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Scan immutable package tag
+        id: trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: ${{ matrix.platform }}
+          TRIVY_VEX: ${{ matrix.vex }}
+        with:
+          image-ref: ${{ matrix.image }}
+          format: sarif
+          output: result.sarif
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          version: v0.73.0
+          cache: true
+          timeout: 30m
+      - name: Record health result
+        if: always()
+        shell: pwsh
+        env:
+          OUTCOME: ${{ steps.trivy.outcome }}
+          PACKAGE: ${{ matrix.package }}
+          TAG: ${{ matrix.tag }}
+          IMAGE: ${{ matrix.image }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          $findings = 0
+          if (Test-Path -LiteralPath result.sarif) {
+            $sarif = Get-Content -LiteralPath result.sarif -Raw | ConvertFrom-Json
+            $findings = @($sarif.runs | ForEach-Object { @($_.results) }).Count
+          }
+          $state = if ($env:OUTCOME -eq 'success') { 'available' } elseif ($findings -gt 0) { 'scan-blocked' } else { 'scan-error' }
+          $reason = if ($findings -gt 0) { "Trivy found $findings HIGH/CRITICAL vulnerability result(s) in $env:TAG." } elseif ($state -eq 'scan-error') { 'The scheduled scanner did not produce a successful vulnerability result.' } else { '' }
+          [ordered]@{ package = $env:PACKAGE; tag = $env:TAG; image = $env:IMAGE; platform = $env:PLATFORM; state = $state; reason = $reason; findings = $findings; scannedAt = [datetime]::UtcNow.ToString('o') } |
+            ConvertTo-Json | Set-Content -LiteralPath result.json -Encoding utf8
+      - name: Upload rescan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rescan-${{ matrix.id }}
+          path: |
+            result.json
+            result.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+  catalog-plan:
+    name: Build rescan health catalog
+    needs: [plan, scan]
+    if: ${{ always() && needs.plan.result == 'success' && (needs.scan.result == 'success' || needs.scan.result == 'failure') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download rescan evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rescan-*
+          path: evidence
+      - name: Merge results and generate catalog
+        shell: pwsh
+        run: |
+          $all = @(Get-ChildItem -LiteralPath evidence -Recurse -File -Filter result.json | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })
+          $results = foreach ($group in $all | Group-Object package) {
+            $blocked = @($group.Group | Where-Object state -eq 'scan-blocked')
+            $errors = @($group.Group | Where-Object state -eq 'scan-error')
+            $state = if ($blocked.Count -gt 0) { 'scan-blocked' } elseif ($errors.Count -gt 0) { 'scan-error' } else { 'available' }
+            [ordered]@{ package = $group.Name; state = $state; reason = (@($group.Group.reason | Where-Object { $_ }) -join ' '); scannedAt = [datetime]::UtcNow.ToString('o'); digest = $null }
+          }
+          [ordered]@{ schemaVersion = 1; results = @($results) } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath scan-results.json -Encoding utf8
+          ./scripts/new-package-health-catalog.ps1 -OutputPath catalog.json -Repository $env:TLC_DOCKER_REPO -ScanResultsPath scan-results.json
+      - name: Upload health catalog plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rescan-health-catalog-plan
+          path: catalog.json
+          if-no-files-found: error
+          retention-days: 7
+
+  catalog:
+    name: Publish rescan health catalog
+    needs: [catalog-plan]
+    if: ${{ needs.catalog-plan.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: package-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download health catalog plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rescan-health-catalog-plan
+          path: plan
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true
+      - name: Install verified Cosign
+        shell: pwsh
+        run: ./.github/scripts/Install-VerifiedCosign.ps1
+      - name: Publish signed health catalog
+        shell: pwsh
+        run: ./scripts/publish-package-health-catalog.ps1 -Repository $env:TLC_DOCKER_REPO -CatalogPath ./plan/catalog.json
+      - name: Remove health catalog staging tag
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          STAGING_TAG_NAME: staging-health-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          ./.github/scripts/Remove-DockerHubStagingTags.ps1 `
+            -Repository $env:TLC_DOCKER_REPO `
+            -Tag $env:STAGING_TAG_NAME

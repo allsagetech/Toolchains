@@ -6,6 +6,8 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'k3d'
+	CanonicalName = 'k3d'
+	Platform = 'windows/amd64'
 	GoToolchain = 'go1.26.6'
 	Vex = '.github/vex/k3d.openvex.json'
 }

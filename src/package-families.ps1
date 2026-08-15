@@ -130,6 +130,8 @@ function Initialize-TlcK9sPackage {
 
 	$global:TlcPackageConfig = @{
 		Name = $Name
+		CanonicalName = 'k9s'
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
 		BuildRevision = 1
 		GoToolchain = 'go1.26.6'
 		UpstreamVersion = '0.51.0'
@@ -200,6 +202,8 @@ function Initialize-TlcKubectlPackage {
 
 	$global:TlcPackageConfig = @{
 		Name = $Name
+		CanonicalName = 'kubectl'
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
 		BuildRevision = 1
 		GoToolchain = 'go1.26.6'
 		KubernetesNetVersion = 'v0.56.0'
@@ -329,5 +333,89 @@ function Initialize-TlcKubectlPackage {
 
 	function global:Test-TlcPackageInstall {
 		Toolchain exec (Get-TlcPkgUri) { kubectl version --client }
+	}
+}
+
+function Initialize-TlcGitHubCliPackage {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[Parameter(Mandatory=$true)][string]$CanonicalName,
+		[Parameter(Mandatory=$true)][string]$Owner,
+		[Parameter(Mandatory=$true)][string]$Repo,
+		[Parameter(Mandatory=$true)][string]$AssetPattern,
+		[Parameter(Mandatory=$true)][string]$BinaryName,
+		[Parameter(Mandatory=$true)][ValidateSet('zip', 'tar.gz', 'direct')][string]$ArchiveType,
+		[string]$ChecksumAssetPattern,
+		[string[]]$VersionArguments = @('--version'),
+		[switch]$Linux
+	)
+
+	$global:TlcPackageConfig = @{
+		Name = $Name
+		CanonicalName = $CanonicalName
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
+		Upstream = "https://github.com/$Owner/$Repo"
+		GitHubOwner = $Owner
+		GitHubRepo = $Repo
+		AssetPattern = $AssetPattern
+		BinaryName = $BinaryName
+		ArchiveType = $ArchiveType
+		ChecksumAssetPattern = $ChecksumAssetPattern
+		VersionArguments = @($VersionArguments)
+		IsLinux = [bool]$Linux
+	}
+	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
+
+	function global:Install-TlcPackage {
+		$asset = Get-GitHubRelease -Owner $TlcPackageConfig.GitHubOwner -Repo $TlcPackageConfig.GitHubRepo `
+			-AssetPattern $TlcPackageConfig.AssetPattern -TagPattern '^v?([0-9]+)\.([0-9]+)\.([0-9]+)$'
+		$TlcPackageConfig.Version = $asset.Version.ToString()
+		$TlcPackageConfig.UpToDate = -not $asset.Version.LaterThan($TlcPackageConfig.Latest)
+		if ($TlcPackageConfig.UpToDate) { return }
+
+		$expectedSha256 = Get-TlcGitHubReleaseAssetSha256 -Uri $asset.URL
+		if (-not $expectedSha256 -and $TlcPackageConfig.ChecksumAssetPattern) {
+			$checksum = Get-GitHubRelease -Owner $TlcPackageConfig.GitHubOwner -Repo $TlcPackageConfig.GitHubRepo `
+				-AssetPattern $TlcPackageConfig.ChecksumAssetPattern -TagPattern '^v?([0-9]+)\.([0-9]+)\.([0-9]+)$'
+			$expectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $checksum.URL -AssetName $asset.Name -Headers (Get-TlcGitHubHeaders)
+		}
+		if (-not $expectedSha256) { throw "no verified SHA-256 was published for $($asset.Name)" }
+
+		$stage = Get-TlcStagingPath $TlcPackageConfig.CanonicalName
+		New-Item -Path $stage -ItemType Directory -Force | Out-Null
+		$download = Join-Path $stage $asset.Name
+		Invoke-TlcWebRequest -Uri $asset.URL -OutFile $download -ExpectedSha256 $expectedSha256 | Out-Null
+		$extract = Join-Path $stage 'extract'
+		New-Item -Path $extract -ItemType Directory -Force | Out-Null
+		switch ([string]$TlcPackageConfig.ArchiveType) {
+			'zip' { Expand-Archive -LiteralPath $download -DestinationPath $extract -Force }
+			'tar.gz' {
+				$tar = Get-TlcApplicationPath -Name 'tar'
+				& $tar '-xzf' $download '-C' $extract
+				if ($LASTEXITCODE -ne 0) { throw "failed to extract $($asset.Name) with exit code $LASTEXITCODE" }
+			}
+			'direct' { Copy-Item -LiteralPath $download -Destination (Join-Path $extract $TlcPackageConfig.BinaryName) -Force }
+		}
+		$source = Get-ChildItem -LiteralPath $extract -Recurse -File | Where-Object { $_.Name -ceq $TlcPackageConfig.BinaryName } | Select-Object -First 1
+		if (-not $source) { throw "$($asset.Name) did not contain $($TlcPackageConfig.BinaryName)" }
+		$pkgRoot = Get-TlcPkgRoot
+		New-Item -Path $pkgRoot -ItemType Directory -Force | Out-Null
+		$output = Join-Path $pkgRoot $TlcPackageConfig.BinaryName
+		Copy-Item -LiteralPath $source.FullName -Destination $output -Force
+		if ($TlcPackageConfig.IsLinux) {
+			& chmod '+x' $output
+			if ($LASTEXITCODE -ne 0) { throw "failed to mark $($TlcPackageConfig.BinaryName) executable" }
+		}
+		Write-TlcVars @{ env = @{ path = $pkgRoot } }
+	}
+
+	function global:Test-TlcPackageInstall {
+		$commandName = [IO.Path]::GetFileNameWithoutExtension([string]$TlcPackageConfig.BinaryName)
+		$arguments = [string[]]@($TlcPackageConfig.VersionArguments)
+		Toolchain exec (Get-TlcPkgUri) {
+			$command = Get-Command $commandName -CommandType Application -ErrorAction Stop | Select-Object -First 1
+			& $command.Source @arguments
+			if ($LASTEXITCODE -ne 0) { throw "$commandName version check failed with exit code $LASTEXITCODE" }
+		}
 	}
 }

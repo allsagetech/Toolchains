@@ -108,6 +108,12 @@ function Test-TlcPackageScript {
 		Write-Error "toolchains: TlcPackageConfig missing name property"
 	}
 	Assert-TlcKindMarkerSafePackageName -Name ([string]$TlcPackageConfig.Name)
+	if ($TlcPackageConfig.CanonicalName) {
+		Assert-TlcKindMarkerSafePackageName -Name ([string]$TlcPackageConfig.CanonicalName)
+	}
+	if ($TlcPackageConfig.Platform -and [string]$TlcPackageConfig.Platform -notin @('windows/amd64', 'linux/amd64')) {
+		Write-Error "toolchains: unsupported package platform: $($TlcPackageConfig.Platform)"
+	}
 	if ($TlcPackageConfig.Nonce -and (-not $TlcPackageConfig.Version)) {
 		Write-Error "toolchains: TlcPackageConfig missing version property"
 	}
