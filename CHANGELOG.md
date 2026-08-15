@@ -5,6 +5,7 @@
 ### Added
 
 - Add integrity-checked Windows and Linux packages for kind, k3d, and kubectl to support Toolchain-managed local Kubernetes clusters.
+- Add checksum-verified Windows and Linux K9s packages for the `toolchain k9s` cluster UI command.
 - Add a Windows Docker Desktop bootstrap package that discovers Docker's current release, downloads it directly from Docker, verifies its SHA-256 and Authenticode publisher, and keeps license acceptance explicit.
 - Add Windows Podman CLI and Podman Machine helpers rebuilt from checksum-verified source modules with patched Go and `x/crypto`, with no automatic host or VM configuration.
 

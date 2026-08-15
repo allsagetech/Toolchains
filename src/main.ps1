@@ -419,7 +419,9 @@ function Get-TlcPushPackagePaths {
 		'src/pkgs/node/node22.ps1',
 		'src/pkgs/jdk/jdk17.ps1',
 		'src/pkgs/kubectl.ps1',
-		'src/pkgs/kubectl-linux.ps1'
+		'src/pkgs/kubectl-linux.ps1',
+		'src/pkgs/k9s.ps1',
+		'src/pkgs/k9s-linux.ps1'
 	)
 	$sharedFiles = @(
 		'src/main.ps1',

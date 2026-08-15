@@ -407,7 +407,7 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($sharedPushSelection -contains 'src/pkgs/websocat.ps1') 'Shared publication infrastructure changes omit the Windows smoke package.'
 	Assert-True ($sharedPushSelection -contains 'src/pkgs/git-linux.ps1') 'Shared publication infrastructure changes omit the Linux smoke package.'
 	$familyPushSelection = @(Get-TlcPushPackagePaths -ChangedPath @('src/package-families.ps1'))
-	foreach ($familyRepresentative in @('src/pkgs/node/node22.ps1', 'src/pkgs/jdk/jdk17.ps1', 'src/pkgs/kubectl.ps1', 'src/pkgs/kubectl-linux.ps1')) {
+	foreach ($familyRepresentative in @('src/pkgs/node/node22.ps1', 'src/pkgs/jdk/jdk17.ps1', 'src/pkgs/kubectl.ps1', 'src/pkgs/kubectl-linux.ps1', 'src/pkgs/k9s.ps1', 'src/pkgs/k9s-linux.ps1')) {
 		Assert-True ($familyPushSelection -contains $familyRepresentative) "Shared package-family changes omit representative $familyRepresentative."
 	}
 	Assert-True (@(Get-TlcPushPackagePaths -ChangedPath @('README.md', 'CHANGELOG.md')).Count -eq 0) 'Documentation-only pushes still select publication jobs.'

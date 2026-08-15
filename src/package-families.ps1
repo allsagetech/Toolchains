@@ -122,6 +122,68 @@ function Initialize-TlcAdoptiumPackage {
 	}
 }
 
+function Initialize-TlcK9sPackage {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[switch]$Linux
+	)
+
+	$global:TlcPackageConfig = @{
+		Name = $Name
+		IsLinux = [bool]$Linux
+	}
+	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
+
+	function global:Install-TlcPackage {
+		$assetPattern = if ($TlcPackageConfig.IsLinux) {
+			'^k9s_Linux_amd64\.tar\.gz$'
+		} else {
+			'^k9s_Windows_amd64\.zip$'
+		}
+		$asset = Get-GitHubRelease `
+			-Owner 'derailed' `
+			-Repo 'k9s' `
+			-AssetPattern $assetPattern `
+			-TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+
+		$TlcPackageConfig.Version = $asset.Version.ToString()
+		$TlcPackageConfig.UpToDate = -not $asset.Version.LaterThan($TlcPackageConfig.Latest)
+		if ($TlcPackageConfig.UpToDate) { return }
+
+		$checksumUri = "https://github.com/derailed/k9s/releases/download/$($asset.Identifier)/checksums.sha256"
+		$expectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $checksumUri -AssetName $asset.Name -Headers (Get-TlcGitHubHeaders)
+		$stagingRoot = Get-TlcStagingPath 'k9s'
+		New-Item -Path $stagingRoot -ItemType Directory -Force | Out-Null
+		$archivePath = Join-Path $stagingRoot $asset.Name
+		Invoke-TlcWebRequest -Uri $asset.URL -OutFile $archivePath -ExpectedSha256 $expectedSha256 | Out-Null
+
+		$pkgRoot = Get-TlcPkgRoot
+		New-Item -Path $pkgRoot -ItemType Directory -Force -ErrorAction Ignore | Out-Null
+		if ($TlcPackageConfig.IsLinux) {
+			$tar = Get-TlcApplicationPath -Name 'tar'
+			& $tar '-xzf' $archivePath '-C' $pkgRoot
+			if ($LASTEXITCODE -ne 0) { throw "failed to extract $($asset.Name) with exit code $LASTEXITCODE" }
+		} else {
+			Expand-Archive -LiteralPath $archivePath -DestinationPath $pkgRoot -Force
+		}
+
+		$outputName = if ($TlcPackageConfig.IsLinux) { 'k9s' } else { 'k9s.exe' }
+		$executable = Get-TlcPkgPath $outputName
+		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "K9s archive did not contain $outputName" }
+		if ($TlcPackageConfig.IsLinux) {
+			& chmod '+x' $executable
+			if ($LASTEXITCODE -ne 0) { throw 'failed to mark k9s executable' }
+		}
+		Write-TlcVars @{ env = @{ path = $pkgRoot } }
+	}
+
+	function global:Test-TlcPackageInstall {
+		Toolchain exec (Get-TlcPkgUri) {
+			k9s version
+		}
+	}
+}
+
 function Initialize-TlcKubectlPackage {
 	param(
 		[Parameter(Mandatory=$true)][string]$Name,
