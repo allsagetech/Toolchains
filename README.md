@@ -84,7 +84,9 @@ pwsh -NoLogo -NoProfile -File ./scripts/build-local-codex-linux-packages.ps1 -Sk
 Notes:
 
 - `Dockerfile` is used on Windows package builds.
-- `Dockerfile.linux` is used automatically on non-Windows hosts.
+- `Dockerfile.linux` is used automatically on non-Windows hosts and intentionally
+  uses `scratch`: ordinary package images are extracted OCI artifacts, not runtime
+  containers. Model-specific Dockerfiles may still use a runtime base when needed.
 - Keep package build/push workflows in this repo; consumers should only `toolchain save`/`toolchain exec` those refs.
 
 Run local validation without building packages:

@@ -36,6 +36,12 @@ registry latency or a stuck child process from occupying a runner indefinitely.
 
 Packages marked `VerifiedDownloads = $false` or `PublishEligible = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification, wait for an upstream security fix, or intentionally remove the package; quarantine never converts an unverified or vulnerable input into an approved release artifact.
 
+Ordinary Linux package images use an empty `scratch` base because Toolchain
+extracts their OCI layers directly and never executes them as containers. This
+keeps package contents limited to the intended tool payload and avoids inheriting
+unrelated operating-system files, vulnerabilities, hard links, or whiteouts.
+Model-specific images may use a runtime base when their package contract requires it.
+
 The unique `staging-*` tag makes a candidate addressable by digest for signing
 and verification without exposing its immutable version tag early. It is
 deleted only after the final version tag is proven to reference that signed

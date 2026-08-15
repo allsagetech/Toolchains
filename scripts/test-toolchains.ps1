@@ -440,6 +440,9 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($workflowText -match 'limit-severities-for-sarif:\s+true') 'Trivy SARIF evidence is not restricted to the enforced HIGH/CRITICAL severities.'
 	Assert-True ($workflowText -match 'Install-VerifiedCosign\.ps1') 'Publication does not use the repository-controlled verified Cosign bootstrap.'
 	Assert-True ($workflowText -notmatch 'sigstore/cosign-installer') 'Publication still depends on the broken Windows Cosign installer action.'
+	$linuxDockerfileText = Get-Content -LiteralPath .\Dockerfile.linux -Raw
+	Assert-True ($linuxDockerfileText -match '(?m)^FROM scratch\s*$') 'Ordinary Linux package images still inherit an unrelated operating-system filesystem.'
+	Assert-True ($linuxDockerfileText -notmatch '(?m)^FROM (?:ubuntu|debian|alpine|mcr\.)') 'Ordinary Linux package images still inherit a vulnerable runtime base.'
 	Assert-True ($workflowText -match 'package-health-summary:') 'Publication does not produce a consolidated package-health artifact.'
 	Assert-True ($workflowText -match 'Remove-DockerHubStagingTags\.ps1') 'Successful publication does not clean up its staging tag.'
 	$stagingCleanupText = Get-Content -LiteralPath .\.github\scripts\Remove-DockerHubStagingTags.ps1 -Raw

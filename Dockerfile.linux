@@ -1,5 +1,7 @@
 # Toolchains
 # Copyright (c) 2026 AllSageTech
 # SPDX-License-Identifier: MPL-2.0
-FROM ubuntu:26.04
+# Toolchain extracts package layers directly; ordinary package images are not run.
+# Keep this artifact layer free of unrelated OS files, CVEs, hard links, and whiteouts.
+FROM scratch
 COPY . /
