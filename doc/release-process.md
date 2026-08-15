@@ -34,7 +34,7 @@ Cosign inherits the runner's output handles to avoid Windows redirected-stream
 deadlocks. Bounded retries and internal, external, and job-level timeouts prevent
 registry latency or a stuck child process from occupying a runner indefinitely.
 
-Packages marked `VerifiedDownloads = $false` or `PublishEligible = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification, wait for an upstream security fix, or intentionally remove the package; quarantine never converts an unverified or vulnerable input into an approved release artifact.
+Packages marked `VerifiedDownloads = $false` or `PublishEligible = $false` are quarantined before build and publication. Their reason is emitted in CI so maintainers can add publisher verification or wait for an upstream security fix; quarantine never converts an unverified or vulnerable input into an approved release artifact. Scheduled Docker Hub maintenance also removes version tags selected by quarantined descriptors. A partially quarantined package family must provide an anchored `Matcher` so cleanup fails closed instead of deleting supported family versions. Cosign attachments are removed only when no remaining durable tag references their subject digest.
 
 Ordinary Linux package images use an empty `scratch` base because Toolchain
 extracts their OCI layers directly and never executes them as containers. This

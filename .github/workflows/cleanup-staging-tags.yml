@@ -20,6 +20,11 @@ on:
         required: true
         default: true
         type: boolean
+      include_quarantined_packages:
+        description: Delete package tags selected by quarantined descriptors
+        required: true
+        default: true
+        type: boolean
       dry_run:
         description: Show the cleanup plan without deleting tags
         required: true
@@ -60,4 +65,18 @@ jobs:
             -Repository $env:TLC_DOCKER_REPO `
             -OlderThanDays ([int]$env:OLDER_THAN_DAYS) `
             -IncludeOrphanedAttachments:([bool]::Parse($env:INCLUDE_ORPHANED_ATTACHMENTS)) `
+            -DryRun:([bool]::Parse($env:DRY_RUN))
+
+      - name: Remove quarantined packages through Docker Hub API
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.include_quarantined_packages }}
+        shell: pwsh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./.github/scripts/Remove-DockerHubQuarantinedTags.ps1 `
+            -Repository $env:TLC_DOCKER_REPO `
             -DryRun:([bool]::Parse($env:DRY_RUN))

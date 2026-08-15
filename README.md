@@ -150,3 +150,6 @@ security or lifecycle concern set `PublishEligible = $false` and a publication
 block reason. Both are excluded before production builds begin. Docker, NASM,
 and zstd are currently provenance-quarantined, while Node 24 is temporarily
 security-quarantined until its upstream archive contains a patched npm bundle.
+The scheduled Docker Hub maintenance job removes tags selected by quarantined
+descriptors and deletes their Cosign attachments only when no durable tag still
+references the same digest. Manual cleanup runs default to a non-destructive preview.

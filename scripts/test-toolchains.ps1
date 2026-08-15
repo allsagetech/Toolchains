@@ -464,8 +464,17 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($stagingCleanupWorkflowText -match 'environment:\s+package-release') 'Scheduled staging cleanup cannot access package-release environment secrets.'
 	Assert-True ($stagingCleanupWorkflowText -match 'secrets\.DOCKERHUB_USERNAME' -and $stagingCleanupWorkflowText -match 'secrets\.DOCKERHUB_TOKEN') 'Scheduled staging cleanup does not receive the Docker Hub environment secrets.'
 	Assert-True ($stagingCleanupWorkflowText -match 'include_orphaned_attachments:[\s\S]+default:\s+true') 'Scheduled cleanup does not include orphaned Cosign attachments.'
+	Assert-True ($stagingCleanupWorkflowText -match 'include_quarantined_packages:[\s\S]+default:\s+true') 'Scheduled cleanup does not remove quarantined package tags.'
+	Assert-True ($stagingCleanupWorkflowText -match 'Remove-DockerHubQuarantinedTags\.ps1') 'Docker Hub cleanup does not enforce descriptor quarantine state.'
 	Assert-True ($stagingCleanupWorkflowText -match 'dry_run:[\s\S]+default:\s+true') 'Manual Docker Hub cleanup is destructive by default.'
 	Assert-True ($workflowText -match 'group:\s+toolchains-package-publication-' -and $stagingCleanupWorkflowText -match 'group:\s+toolchains-package-publication-refs/heads/main') 'Cleanup can race main package publication.'
+	$quarantineCleanupText = Get-Content -LiteralPath .\.github\scripts\Remove-DockerHubQuarantinedTags.ps1 -Raw
+	Assert-True ($quarantineCleanupText -match 'Get-TlcPackagePublicationState') 'Quarantine cleanup does not derive deletion state from package descriptors.'
+	Assert-True ($quarantineCleanupText -match 'Partially quarantined package.+requires a tag Matcher') 'Partial-family quarantine cleanup can delete supported package versions.'
+	Assert-True ($quarantineCleanupText -match '\$remainingDurableDigests\.ContainsKey\(\$subjectDigest\)') 'Quarantine cleanup can delete Cosign attachments shared with a durable package tag.'
+	Assert-True ($quarantineCleanupText -match '/namespaces/\$namespaceSegment/repositories/\$repositorySegment/tags/\$tagSegment') 'Quarantine cleanup does not delete one exact Docker Hub tag.'
+	Assert-True ($quarantineCleanupText -notmatch '/manifests/') 'Quarantine cleanup can delete a shared registry manifest instead of one tag.'
+	Assert-True ($quarantineCleanupText -match 'if \(\$DryRun\)') 'Quarantine cleanup has no non-destructive preview mode.'
 	$cosignInstallerText = Get-Content -LiteralPath .\.github\scripts\Install-VerifiedCosign.ps1 -Raw
 	Assert-True ($cosignInstallerText -match '\$version = ''v2\.6\.0''') 'Cosign bootstrap version is not pinned.'
 	Assert-True ($cosignInstallerText -match '7beb4dd1e19a72c328bbf7c0d7342d744edbf5cbb082f227b2b76e04a21c16ef') 'Cosign Windows asset digest is not pinned.'
