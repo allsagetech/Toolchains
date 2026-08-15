@@ -443,6 +443,8 @@ function Test-ProductionReadinessPolicies {
 	$linuxDockerfileText = Get-Content -LiteralPath .\Dockerfile.linux -Raw
 	Assert-True ($linuxDockerfileText -match '(?m)^FROM scratch\s*$') 'Ordinary Linux package images still inherit an unrelated operating-system filesystem.'
 	Assert-True ($linuxDockerfileText -notmatch '(?m)^FROM (?:ubuntu|debian|alpine|mcr\.)') 'Ordinary Linux package images still inherit a vulnerable runtime base.'
+	$localContractText = Get-Content -LiteralPath .\.github\scripts\Test-LocalImageContract.ps1 -Raw
+	Assert-True ($localContractText -match 'docker create \$ImageRef ''toolchain-contract-placeholder''') 'Exact-image contract testing cannot inspect artifact-only scratch images.'
 	Assert-True ($workflowText -match 'package-health-summary:') 'Publication does not produce a consolidated package-health artifact.'
 	Assert-True ($workflowText -match 'Remove-DockerHubStagingTags\.ps1') 'Successful publication does not clean up its staging tag.'
 	$stagingCleanupText = Get-Content -LiteralPath .\.github\scripts\Remove-DockerHubStagingTags.ps1 -Raw

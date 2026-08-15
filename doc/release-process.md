@@ -41,6 +41,9 @@ extracts their OCI layers directly and never executes them as containers. This
 keeps package contents limited to the intended tool payload and avoids inheriting
 unrelated operating-system files, vulnerabilities, hard links, or whiteouts.
 Model-specific images may use a runtime base when their package contract requires it.
+Exact-image contract testing supplies a never-executed placeholder command only
+when creating the stopped inspection container; the artifact itself remains
+commandless and is never started.
 
 The unique `staging-*` tag makes a candidate addressable by digest for signing
 and verification without exposing its immutable version tag early. It is

@@ -60,7 +60,10 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('toolchains-contract-' + [guid
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 $containerId = $null
 try {
-    $containerId = (& docker create $ImageRef | Out-String).Trim()
+    # Artifact-only scratch images intentionally define no runtime command. Docker
+    # still needs a command to create a stopped container for filesystem inspection;
+    # this placeholder is never executed and does not modify the candidate image.
+    $containerId = (& docker create $ImageRef 'toolchain-contract-placeholder' | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $containerId) {
         throw "Could not create a container from candidate image: $ImageRef"
     }
