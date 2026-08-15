@@ -450,6 +450,7 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($stagingCleanupText -match '\$freshStagingDigests\.ContainsKey\(\$subjectDigest\)') 'Docker Hub cleanup can delete attachments for an active staging image.'
 	Assert-True ($stagingCleanupText -match 'AddMinutes\(-\$SafetyDelayMinutes\)') 'Docker Hub cleanup has no safety delay for in-flight publication.'
 	Assert-True ($stagingCleanupText -match 'if \(\$DryRun\)') 'Docker Hub cleanup has no non-destructive preview mode.'
+	Assert-True ($stagingCleanupText -match '\$pageResults\.Count -lt \$pageSize') 'Docker Hub cleanup trusts stale pagination metadata after bulk deletion.'
 	Assert-True (Test-Path -LiteralPath .\.github\workflows\cleanup-staging-tags.yml -PathType Leaf) 'Orphaned staging tags have no scheduled cleanup workflow.'
 	$stagingCleanupWorkflowText = Get-Content -LiteralPath .\.github\workflows\cleanup-staging-tags.yml -Raw
 	Assert-True ($stagingCleanupWorkflowText -match 'environment:\s+package-release') 'Scheduled staging cleanup cannot access package-release environment secrets.'

@@ -104,11 +104,19 @@ function Remove-DockerHubTag {
 
 function Get-DockerHubTagInventory {
 	$inventory = [Collections.Generic.List[object]]::new()
-	$uri = "https://hub.docker.com/v2/namespaces/$namespaceSegment/repositories/$repositorySegment/tags?page_size=100&page=1"
-	while ($uri) {
+	$pageSize = 100
+	$pageNumber = 1
+	while ($true) {
+		$uri = "https://hub.docker.com/v2/namespaces/$namespaceSegment/repositories/$repositorySegment/tags?page_size=$pageSize&page=$pageNumber"
 		$response = Invoke-DockerHubApi -Method Get -Uri $uri -Headers $headers
-		foreach ($item in @($response.results)) { $inventory.Add($item) }
-		$uri = if ($response.next) { [string]$response.next } else { $null }
+		$pageResults = @($response.results)
+		foreach ($item in $pageResults) { $inventory.Add($item) }
+		# Docker Hub can retain a stale count/next link after bulk tag deletion.
+		# A short page is authoritative and prevents a follow-up 404 from making
+		# an otherwise complete cleanup inventory fail.
+		if ($pageResults.Count -lt $pageSize) { break }
+		if (-not $response.next) { break }
+		$pageNumber += 1
 	}
 	return @($inventory)
 }
