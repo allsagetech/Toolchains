@@ -22,7 +22,7 @@ on:
         required: false
         type: string
       full_inventory:
-        description: Explicitly publish the complete package inventory
+        description: Explicitly publish the enabled package inventory (large-model jobs are disabled)
         required: true
         default: false
         type: boolean
@@ -210,6 +210,11 @@ jobs:
             }
             $entries = @($entries | Where-Object { [bool]$_.verified_downloads -and [bool]$_.publish_eligible })
 
+            foreach ($entry in @($entries | Where-Object { [string]$_.tier -eq 'model-large' })) {
+              Write-Output "::notice file=$($entry.package),title=Large-model job disabled::Large-model publication is disabled to avoid unavailable self-hosted runner jobs."
+            }
+            $entries = @($entries | Where-Object { [string]$_.tier -ne 'model-large' })
+
             if ($entries.Count -eq 0) {
               Write-Host 'No publication-eligible outdated packages were discovered.'
             }
@@ -231,21 +236,11 @@ jobs:
                 return $tier -eq 'tooling'
               }
               return ($tier -eq 'tooling') -or
-                ($tier -eq 'model-small' -and ($isMainPush -or $isScheduled -or $isManual -or $matchesRef)) -or
-                ($tier -eq 'model-large' -and ($isScheduled -or $isManual -or $matchesRef))
+                ($tier -eq 'model-small' -and ($isMainPush -or $isScheduled -or $isManual -or $matchesRef))
             })
 
             foreach ($entry in $entries) {
               $entry | Add-Member -NotePropertyName force_build -NotePropertyValue $false -Force
-              $tier = if ($entry.tier) { [string]$entry.tier } else { 'tooling' }
-              if ($tier -eq 'model-large') {
-                $entry.runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
-                $entry.publish_runs_on = @('self-hosted', 'linux', 'x64', 'toolchains-large')
-                $entry.pkg_root = '/mnt/toolchains-pkg'
-                $entry.cache_path = '/mnt/toolchains-pkg/cache'
-                $entry.publish_pkg_root = '/mnt/toolchains-pkg'
-                $entry.publish_cache_path = '/mnt/toolchains-pkg/cache'
-              }
             }
           }
 
@@ -947,6 +942,7 @@ jobs:
       - name: Verify signature and attestations fail closed
         if: steps.pkg.outputs.up-to-date == 'False'
         shell: pwsh
+        timeout-minutes: 10
         env:
           DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
         run: |
@@ -958,22 +954,49 @@ jobs:
             param(
               [Parameter(Mandatory=$true)][string]$Description,
               [Parameter(Mandatory=$true)][string[]]$Arguments,
-              [int]$MaxAttempts = 3,
-              [int]$TimeoutSeconds = 150
+              [int]$MaxAttempts = 2,
+              [int]$TimeoutSeconds = 75
             )
 
             $cosign = Get-Command cosign -ErrorAction Stop
             for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
               Write-Host "$Description (attempt $attempt/$MaxAttempts)"
-              $process = Start-Process -FilePath $cosign.Source -ArgumentList $Arguments -NoNewWindow -PassThru
-              $finished = $process.WaitForExit($TimeoutSeconds * 1000)
-              if (-not $finished) {
-                try { $process.Kill($true) } catch { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-                $reason = "timed out after $TimeoutSeconds seconds"
-              } elseif ($process.ExitCode -eq 0) {
-                return
-              } else {
-                $reason = "failed with exit code $($process.ExitCode)"
+              $startInfo = [Diagnostics.ProcessStartInfo]::new()
+              $startInfo.FileName = $cosign.Source
+              $startInfo.UseShellExecute = $false
+              $startInfo.CreateNoWindow = $true
+              $startInfo.RedirectStandardOutput = $true
+              $startInfo.RedirectStandardError = $true
+              foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+
+              $process = [Diagnostics.Process]::new()
+              $process.StartInfo = $startInfo
+              try {
+                if (-not $process.Start()) { throw "could not start $($cosign.Source)" }
+                $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+                $stderrTask = $process.StandardError.ReadToEndAsync()
+                $finished = $process.WaitForExit($TimeoutSeconds * 1000)
+                if (-not $finished) {
+                  try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
+                  if (-not $process.WaitForExit(10000)) {
+                    throw "$Description could not terminate its timed-out process tree."
+                  }
+                }
+
+                $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+                $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
+                if ($stdout) { Write-Host $stdout }
+                if ($stderr) { Write-Host $stderr }
+
+                if (-not $finished) {
+                  $reason = "timed out after $TimeoutSeconds seconds"
+                } elseif ($process.ExitCode -eq 0) {
+                  return
+                } else {
+                  $reason = "failed with exit code $($process.ExitCode)"
+                }
+              } finally {
+                $process.Dispose()
               }
 
               if ($attempt -lt $MaxAttempts) {
@@ -986,7 +1009,7 @@ jobs:
             throw "$Description $reason after $MaxAttempts attempts."
           }
 
-          $identityArguments = @('--timeout', '2m', '--certificate-identity', $identity, '--certificate-oidc-issuer', $issuer)
+          $identityArguments = @('--timeout', '60s', '--certificate-identity', $identity, '--certificate-oidc-issuer', $issuer)
           Invoke-CosignVerification -Description 'Published signature verification' -Arguments (@('verify') + $identityArguments + $env:DIGEST_REF)
           Invoke-CosignVerification -Description 'Published SBOM attestation verification' -Arguments (@('verify-attestation', '--type', 'spdxjson') + $identityArguments + $env:DIGEST_REF)
           Invoke-CosignVerification -Description 'Published provenance attestation verification' -Arguments (@('verify-attestation', '--type', 'slsaprovenance') + $identityArguments + $env:DIGEST_REF)
