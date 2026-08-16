@@ -4,13 +4,14 @@
 param(
 	[Parameter(Mandatory=$true)][string]$PriorHealthPath,
 	[Parameter(Mandatory=$true)][string]$EvidenceRoot,
-	[Parameter(Mandatory=$true)][string]$OutputPath
+	[Parameter(Mandatory=$true)][string]$OutputPath,
+	[switch]$CurrentResultsAuthoritative
 )
 
 $ErrorActionPreference = 'Stop'
 $results = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
 
-function Add-PackageScanResult {
+function ConvertTo-PackageScanResult {
 	param(
 		[Parameter(Mandatory=$true)][object]$Result,
 		[Parameter(Mandatory=$true)][string]$Source
@@ -25,7 +26,7 @@ function Add-PackageScanResult {
 	$digest = [string]$Result.digest
 	if ($digest -and $digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid scan digest for '$package' in $Source." }
 
-	$results[$package] = [pscustomobject][ordered]@{
+	return [pscustomobject][ordered]@{
 		package = $package
 		state = $state
 		reason = [string]$Result.reason
@@ -38,21 +39,45 @@ if (-not (Test-Path -LiteralPath $PriorHealthPath -PathType Leaf)) { throw "Prio
 $priorEntries = @(Get-Content -LiteralPath $PriorHealthPath -Raw | ConvertFrom-Json)
 foreach ($entry in $priorEntries) {
 	if (-not $entry.LastScannedAt) { continue }
-	Add-PackageScanResult -Source $PriorHealthPath -Result ([pscustomobject]@{
+	$normalized = ConvertTo-PackageScanResult -Source $PriorHealthPath -Result ([pscustomobject]@{
 		package = [string]$entry.Name
 		state = [string]$entry.State
 		reason = [string]$entry.Reason
 		scannedAt = $entry.LastScannedAt
 		digest = [string]$entry.Digest
 	})
+	$results[[string]$normalized.package] = $normalized
 }
 
+$currentResults = @()
 if (Test-Path -LiteralPath $EvidenceRoot -PathType Container) {
-	foreach ($file in Get-ChildItem -LiteralPath $EvidenceRoot -Recurse -File -Filter '*.health.json' | Sort-Object FullName) {
+	$evidenceFiles = @(
+		@(Get-ChildItem -LiteralPath $EvidenceRoot -Recurse -File -Filter '*.health.json')
+		@(Get-ChildItem -LiteralPath $EvidenceRoot -Recurse -File -Filter 'result.json')
+	) | Sort-Object FullName -Unique
+	foreach ($file in $evidenceFiles) {
 		$document = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
 		$current = if ($null -ne $document.results) { @($document.results) } else { @($document) }
-		foreach ($result in $current) { Add-PackageScanResult -Result $result -Source $file.FullName }
+		foreach ($result in $current) { $currentResults += ConvertTo-PackageScanResult -Result $result -Source $file.FullName }
 	}
+}
+
+foreach ($group in $currentResults | Group-Object package) {
+	$members = @($group.Group)
+	$state = @('scan-blocked','scan-error','quarantined','unavailable','available') |
+		Where-Object { $candidate = $_; @($members | Where-Object state -eq $candidate).Count -gt 0 } |
+		Select-Object -First 1
+	$latest = $members | Sort-Object { [datetime]$_.scannedAt } -Descending | Select-Object -First 1
+	$current = [pscustomobject][ordered]@{
+		package = [string]$group.Name
+		state = [string]$state
+		reason = (@($members.reason | Where-Object { $_ } | Sort-Object -Unique) -join ' ')
+		scannedAt = [string]$latest.scannedAt
+		digest = [string]$latest.digest
+	}
+	$existing = $results[[string]$group.Name]
+	$replace = $CurrentResultsAuthoritative -or $null -eq $existing -or $current.state -ne 'available' -or $existing.state -eq 'available'
+	if ($replace) { $results[[string]$group.Name] = $current }
 }
 
 $document = [ordered]@{

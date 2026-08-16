@@ -35,6 +35,7 @@ foreach ($descriptor in Read-TlcPackageDescriptors -Path $packagePaths) {
 			if ($_ -match "^$([regex]::Escape($name))-(.+)$") { $Matches[1].Replace('_', '+') }
 		} | Where-Object { $_ } | Sort-Object -Unique)
 		$scan = $scanResults[$name]
+		if (-not $scan -and $canonicalName -ne $name) { $scan = $scanResults[$canonicalName] }
 		$state = if (-not $publication.PublishEligible) { 'quarantined' } elseif ($scan -and [string]$scan.state -ne 'available') { [string]$scan.state } elseif ($versions.Count -gt 0) { 'available' } else { 'unavailable' }
 		$reason = if (-not $publication.PublishEligible) { [string]$publication.QuarantineReason } elseif ($scan -and $scan.reason) { [string]$scan.reason } elseif ($versions.Count -eq 0) { 'No durable package version is currently published.' } else { '' }
 		$records += [pscustomobject]@{

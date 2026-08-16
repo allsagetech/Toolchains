@@ -320,6 +320,7 @@ function Test-ProductionReadinessPolicies {
 	$rollbackWorkflowText = Get-Content -LiteralPath .\.github\workflows\rollback-package.yml -Raw
 	$rollbackScriptText = Get-Content -LiteralPath .\scripts\rollback-package-tag.ps1 -Raw
 	$rescanPlanText = Get-Content -LiteralPath .\scripts\export-rescan-matrix.ps1 -Raw
+	$rescanWorkflowText = Get-Content -LiteralPath .\.github\workflows\rescan-published.yml -Raw
 	$consumer = Get-Content -LiteralPath .\toolchain-consumer.json -Raw | ConvertFrom-Json
 	$runtimeText = Get-Content -LiteralPath .\src\package-runtime.ps1 -Raw
 	Assert-True ([int]$consumer.schemaVersion -eq 1) 'Toolchain consumer manifest has an unsupported schema.'
@@ -351,6 +352,9 @@ function Test-ProductionReadinessPolicies {
 		Assert-True ($rollbackScriptText -match [regex]::Escape($evidence)) "Package rollback is missing evidence gate: $evidence"
 	}
 	Assert-True ($rescanPlanText -match 'Sort-Object Version -Descending') 'Scheduled rescans do not select the newest durable package version.'
+	Assert-True ($rescanPlanText -match '\[string\]\$Package' -and $rescanPlanText -match '\$entry\.canonical') 'Published-package rescans cannot safely select a logical package family.'
+	Assert-True ($rescanWorkflowText -match 'scan:[\s\S]+steps:\s+- name: Checkout Toolchains[\s\S]+Scan immutable package tag') 'Published-package rescans cannot load repository VEX statements.'
+	Assert-True ($rescanWorkflowText -match 'CurrentResultsAuthoritative' -and $rescanWorkflowText -match 'inputs:[\s\S]+package:') 'Targeted rescans can replace the signed catalog instead of safely merging into it.'
 	$workflowTexts = @(Get-ChildItem -LiteralPath .\.github\workflows -File -Filter '*.yml' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw })
 	$uploadCount = @($workflowTexts | ForEach-Object { [regex]::Matches($_, 'uses:\s*actions/upload-artifact@') }).Count
 	$retentionValues = @($workflowTexts | ForEach-Object { [regex]::Matches($_, 'retention-days:\s*([0-9]+)') | ForEach-Object { [int]$_.Groups[1].Value } })

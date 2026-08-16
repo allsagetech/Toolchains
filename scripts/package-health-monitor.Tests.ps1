@@ -33,6 +33,23 @@ Describe 'Package health monitor' {
 		([datetime]$result.results[0].scannedAt).ToUniversalTime().ToString('o') | Should -Be '2026-08-16T10:00:00.0000000Z'
 	}
 
+	It 'preserves an unsafe family result until an authoritative rescan clears it' {
+		$prior = Join-Path $script:root 'prior-unsafe.json'
+		$evidence = Join-Path $script:root 'current'
+		$conservative = Join-Path $script:root 'conservative.json'
+		$authoritative = Join-Path $script:root 'authoritative.json'
+		New-Item -ItemType Directory -Path $evidence | Out-Null
+		@([ordered]@{ Name='family'; State='scan-blocked'; Reason='CVE'; LastScannedAt='2026-08-10T10:00:00Z'; Digest=$null }) |
+			ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $prior
+		[ordered]@{ package='family'; state='available'; reason=''; scannedAt='2026-08-16T10:00:00Z'; digest=$null } |
+			ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'result.json')
+
+		& $script:merge -PriorHealthPath $prior -EvidenceRoot $evidence -OutputPath $conservative
+		& $script:merge -PriorHealthPath $prior -EvidenceRoot $evidence -OutputPath $authoritative -CurrentResultsAuthoritative
+		(Get-Content -LiteralPath $conservative -Raw | ConvertFrom-Json).results[0].state | Should -Be 'scan-blocked'
+		(Get-Content -LiteralPath $authoritative -Raw | ConvertFrom-Json).results[0].state | Should -Be 'available'
+	}
+
 	It 'accepts fresh available signed-catalog results' {
 		@([ordered]@{ Name='demo'; State='available'; Reason=''; Versions=@('1.0.0'); LastScannedAt='2026-08-16T10:00:00Z' }) |
 			ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:input

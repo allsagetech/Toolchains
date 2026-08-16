@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory=$true)][string]$OutputPath,
-	[string]$Repository = 'allsagetech/toolchains'
+	[string]$Repository = 'allsagetech/toolchains',
+	[string]$Package
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -28,11 +29,20 @@ foreach ($descriptor in Read-TlcPackageDescriptors -Path $packagePaths) {
 		$entries += [ordered]@{
 			id = [IO.Path]::GetFileNameWithoutExtension($descriptor.Path)
 			package = $name
+			canonical = $(if ($config.CanonicalName) { [string]$config.CanonicalName } else { $name })
 			tag = [string]$latest.Tag
 			image = "$Repository`:$($latest.Tag)"
 			platform = if ($config.Platform) { [string]$config.Platform } elseif (Test-TlcRunsOnUbuntu -RunsOn (Get-TlcPackageRunsOn -Config $config)) { 'linux/amd64' } else { 'windows/amd64' }
 			vex = [string]$config.Vex
-		}
+	}
+}
+if ($Package) {
+	$selectors = @($Package -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+	$entries = @($entries | Where-Object {
+		$entry = $_
+		@($selectors | Where-Object { $_ -ieq [string]$entry.id -or $_ -ieq [string]$entry.package -or $_ -ieq [string]$entry.canonical }).Count -gt 0
+	})
+	if ($entries.Count -eq 0) { throw "No durable package matched rescan selector '$Package'." }
 }
 $document = [ordered]@{ include = $entries }
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputPath), ($document | ConvertTo-Json -Depth 10 -Compress), [Text.UTF8Encoding]::new($false))
