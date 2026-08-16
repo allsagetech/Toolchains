@@ -90,7 +90,9 @@ function Write-HfModelLayeredDockerfile {
 	$safeName = ([string]$TlcPackageConfig.Name) -replace '[^A-Za-z0-9_.-]', '-'
 	$dockerfilePath = Join-Path $PkgRoot "Dockerfile.hf-model-$safeName"
 	$dockerLines = [System.Collections.ArrayList]::new()
-	$dockerLines.Add('FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f') | Out-Null
+	# Toolchain extracts these OCI layers as data; model images are never executed.
+	# A scratch base keeps unrelated operating-system packages and CVEs out of the artifact.
+	$dockerLines.Add('FROM scratch') | Out-Null
 	Add-TlcDockerCopyLine -Lines $dockerLines -Source '.tlc' -Destination '.tlc'
 	Add-TlcDockerCopyLine -Lines $dockerLines -Source 'official-models.manifest.json' -Destination 'official-models.manifest.json'
 

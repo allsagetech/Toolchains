@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 $global:TlcPackageConfig = @{
 	Name = 'git-linux'
 	RunsOn = 'ubuntu-latest'
+	BuildRevision = 1
 }
 
 function global:Install-TlcPackage {
@@ -27,7 +28,8 @@ function global:Install-TlcPackage {
 	if ($gitVersionText -notmatch '([0-9]+)\.([0-9]+)\.([0-9]+)') {
 		throw "Could not parse git version from output: $gitVersionText"
 	}
-	$version = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+	$upstreamVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+	$version = "$upstreamVersion+$($TlcPackageConfig.BuildRevision)"
 
 	$TlcPackageConfig.Version = $version
 	$TlcPackageConfig.UpToDate = -not ([TlcSemanticVersion]::new($version).LaterThan($TlcPackageConfig.Latest))

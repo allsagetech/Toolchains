@@ -81,13 +81,6 @@ $bases = @(
 		Repository = 'windows/nanoserver'
 		Tag = 'ltsc2022'
 		Files = @('Dockerfile')
-	},
-	@{
-		Reference = 'ubuntu:22.04'
-		Registry = 'registry-1.docker.io'
-		Repository = 'library/ubuntu'
-		Tag = '22.04'
-		Files = @('src/huggingface-image.ps1', 'src/pkgs/openai-gpt-oss-20b.ps1')
 	}
 )
 

@@ -534,11 +534,13 @@ function Test-ProductionReadinessPolicies {
 	$linuxDockerfileText = Get-Content -LiteralPath .\Dockerfile.linux -Raw
 	Assert-True ($linuxDockerfileText -match '(?m)^FROM scratch\s*$') 'Ordinary Linux package images still inherit an unrelated operating-system filesystem.'
 	Assert-True ($linuxDockerfileText -notmatch '(?m)^FROM (?:ubuntu|debian|alpine|mcr\.)') 'Ordinary Linux package images still inherit a vulnerable runtime base.'
+	$gitLinuxPackageText = Get-Content -LiteralPath .\src\pkgs\git-linux.ps1 -Raw
+	Assert-True ($gitLinuxPackageText -match 'BuildRevision = 1' -and $gitLinuxPackageText -match '\$version = "\$upstreamVersion\+\$\(\$TlcPackageConfig\.BuildRevision\)"') 'Git Linux does not carry a republishable scratch-image revision.'
 	$windowsDockerfileText = Get-Content -LiteralPath .\Dockerfile -Raw
 	Assert-True ($windowsDockerfileText -match '(?m)^FROM mcr\.microsoft\.com/windows/nanoserver:ltsc2022@sha256:[0-9a-f]{64}\s*$') 'Windows package images do not pin the Nano Server base by digest.'
-	Assert-True ($huggingFaceImageText -match "FROM ubuntu:22\.04@sha256:[0-9a-f]{64}") 'Generated layered Linux images do not pin Ubuntu by digest.'
+	Assert-True ($huggingFaceImageText -match "FROM scratch" -and $huggingFaceImageText -notmatch "FROM ubuntu:") 'Generated model artifacts still inherit an unrelated operating-system filesystem.'
 	$openAiModelText = Get-Content -LiteralPath .\src\pkgs\openai-gpt-oss-20b.ps1 -Raw
-	Assert-True ($openAiModelText -match "FROM ubuntu:22\.04@sha256:[0-9a-f]{64}") 'The custom OpenAI model image does not pin Ubuntu by digest.'
+	Assert-True ($openAiModelText -match "FROM scratch" -and $openAiModelText -notmatch "FROM ubuntu:") 'The custom OpenAI model artifact still inherits an unrelated operating-system filesystem.'
 	$localContractText = Get-Content -LiteralPath .\.github\scripts\Test-LocalImageContract.ps1 -Raw
 	Assert-True ($localContractText -match 'docker create \$ImageRef ''toolchain-contract-placeholder''') 'Exact-image contract testing cannot inspect artifact-only scratch images.'
 	Assert-True ($workflowText -match 'package-health-summary:') 'Publication does not produce a consolidated package-health artifact.'
