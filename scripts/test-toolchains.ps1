@@ -536,6 +536,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($linuxDockerfileText -notmatch '(?m)^FROM (?:ubuntu|debian|alpine|mcr\.)') 'Ordinary Linux package images still inherit a vulnerable runtime base.'
 	$gitLinuxPackageText = Get-Content -LiteralPath .\src\pkgs\git-linux.ps1 -Raw
 	Assert-True ($gitLinuxPackageText -match 'BuildRevision = 1' -and $gitLinuxPackageText -match '\$version = "\$upstreamVersion\+\$\(\$TlcPackageConfig\.BuildRevision\)"') 'Git Linux does not carry a republishable scratch-image revision.'
+	$mavenPackageText = Get-Content -LiteralPath .\src\pkgs\maven.ps1 -Raw
+	Assert-True ($mavenPackageText -match 'BuildRevision = 1' -and $mavenPackageText -match "password\|passphrase" -and $mavenPackageText -match 'credential value intentionally omitted') 'Maven does not remove upstream example credential elements in a republishable revision.'
 	$windowsDockerfileText = Get-Content -LiteralPath .\Dockerfile -Raw
 	Assert-True ($windowsDockerfileText -match '(?m)^FROM mcr\.microsoft\.com/windows/nanoserver:ltsc2022@sha256:[0-9a-f]{64}\s*$') 'Windows package images do not pin the Nano Server base by digest.'
 	Assert-True ($huggingFaceImageText -match "FROM scratch" -and $huggingFaceImageText -notmatch "FROM ubuntu:") 'Generated model artifacts still inherit an unrelated operating-system filesystem.'
