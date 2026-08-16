@@ -846,6 +846,8 @@ function Test-SemanticVersionValidation {
 }
 
 function Test-PackageInventory {
+	$attributes = Get-Content -LiteralPath .\.gitattributes -Raw
+	Assert-True ($attributes -match '(?m)^/PACKAGE_INVENTORY\.md\s+text\s+eol=lf\s*$') 'PACKAGE_INVENTORY.md is not pinned to LF for deterministic Windows checkouts.'
 	$tempPath = Join-Path ([IO.Path]::GetTempPath()) ("toolchains-inventory-$([Guid]::NewGuid().ToString('n')).md")
 	try {
 		& .\scripts\export-package-inventory.ps1 -OutputPath $tempPath | Out-Null
