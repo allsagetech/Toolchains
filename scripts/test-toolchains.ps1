@@ -543,6 +543,29 @@ function Test-ProductionReadinessPolicies {
 	$codexPackageText = Get-Content -LiteralPath .\src\pkgs\codex.ps1 -Raw
 	Assert-True ($codexPackageText -match 'codex-package-x86_64-pc-windows-msvc\\\.tar\\\.gz' -and $codexPackageText -match 'ExpectedSha256' -and $codexPackageText -match 'codex-package\.json') 'Codex does not install the verified native upstream package.'
 	Assert-True ($codexPackageText -notmatch 'nodejs|npm install|@openai%2Fcodex/latest') 'Codex still bundles the vulnerable Node/npm installation stack.'
+	foreach ($gradleMajor in @(7, 8)) {
+		$gradlePath = ".\src\pkgs\gradle\gradle$gradleMajor.ps1"
+		$gradleText = Get-Content -LiteralPath $gradlePath -Raw
+		$gradleConfig = (Read-TlcPackageDescriptor -Path $gradlePath).Config
+		$gradleOverlays = @{}
+		foreach ($overlay in @($gradleConfig.SecurityOverlays)) { $gradleOverlays[[string]$overlay.Name] = $overlay }
+		Assert-True ($gradleConfig.BuildRevision -eq 1) "Gradle $gradleMajor security rebuild does not carry a package revision."
+		Assert-True ($gradleOverlays['jackson-core'].Version -eq '2.18.8' -and $gradleOverlays['jackson-databind'].Version -eq '2.18.8') "Gradle $gradleMajor does not overlay the fixed Jackson release."
+		Assert-True ($gradleOverlays['plexus-utils'].Version -eq '3.6.1') "Gradle $gradleMajor does not overlay the fixed Plexus Utils release."
+		foreach ($overlay in @($gradleConfig.SecurityOverlays)) {
+			Assert-True ($overlay.ExpectedSha256 -match '^[0-9a-f]{64}$') "Gradle $gradleMajor $($overlay.Name) overlay does not pin SHA-256."
+		}
+		Assert-True ($gradleText -match 'Copy-Item -LiteralPath \$plan\.Staged -Destination \$plan\.Existing' -and $gradleText -match 'Get-FileHash -LiteralPath \$plan\.Existing') "Gradle $gradleMajor does not preserve registry filenames while verifying replacement bytes."
+		Assert-True ($gradleText -match 'gradle --version' -and $gradleText -match 'gradle --no-daemon') "Gradle $gradleMajor lacks a real runtime task contract."
+	}
+	$gradle7Config = (Read-TlcPackageDescriptor -Path .\src\pkgs\gradle\gradle7.ps1).Config
+	$gradle7Overlays = @{}
+	foreach ($overlay in @($gradle7Config.SecurityOverlays)) { $gradle7Overlays[[string]$overlay.Name] = $overlay }
+	Assert-True ($gradle7Overlays['bcpg-jdk18on'].Version -eq '1.84' -and $gradle7Overlays['bcprov-jdk18on'].Version -eq '1.84' -and $gradle7Overlays['bcutil-jdk18on'].Version -eq '1.84') 'Gradle 7 does not keep the Bouncy Castle overlay family version-aligned.'
+	$gradle9Text = Get-Content -LiteralPath .\src\pkgs\gradle\gradle9.ps1 -Raw
+	$gradle9Config = (Read-TlcPackageDescriptor -Path .\src\pkgs\gradle\gradle9.ps1).Config
+	Assert-True (-not $gradle9Config.Contains('SecurityOverlays')) 'Gradle 9 can downgrade the fixed upstream dependency set.'
+	Assert-True ($gradle9Text -match 'gradle --version' -and $gradle9Text -match 'gradle --no-daemon') 'Gradle 9 lacks a real runtime task contract.'
 	$windowsDockerfileText = Get-Content -LiteralPath .\Dockerfile -Raw
 	Assert-True ($windowsDockerfileText -match '(?m)^FROM mcr\.microsoft\.com/windows/nanoserver:ltsc2022@sha256:[0-9a-f]{64}\s*$') 'Windows package images do not pin the Nano Server base by digest.'
 	Assert-True ($huggingFaceImageText -match "FROM scratch" -and $huggingFaceImageText -notmatch "FROM ubuntu:") 'Generated model artifacts still inherit an unrelated operating-system filesystem.'

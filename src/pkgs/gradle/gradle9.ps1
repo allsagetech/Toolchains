@@ -39,5 +39,23 @@ function global:Install-TlcPackage {
 }
 
 function global:Test-TlcPackageInstall {
-	Get-Content (Get-TlcPkgPath '.tlc')
+	Toolchain exec (Get-TlcPkgUri) {
+		$contractRoot = Join-Path $env:TEMP "toolchains-gradle-contract-$([Guid]::NewGuid().ToString('n'))"
+		$originalGradleUserHome = $env:GRADLE_USER_HOME
+		$originalJavaHome = $env:JAVA_HOME
+		try {
+			if ($env:JAVA_HOME_17_X64) { $env:JAVA_HOME = $env:JAVA_HOME_17_X64 }
+			$env:GRADLE_USER_HOME = Join-Path $contractRoot 'home'
+			New-Item -ItemType Directory -Path $contractRoot -Force | Out-Null
+			'tasks.register("verifyToolchain") { doLast { println("toolchains-gradle-contract") } }' | Set-Content -LiteralPath (Join-Path $contractRoot 'build.gradle')
+			gradle --version
+			if ($LASTEXITCODE -ne 0) { throw "Gradle version contract failed with exit code $LASTEXITCODE." }
+			gradle --no-daemon -p $contractRoot verifyToolchain
+			if ($LASTEXITCODE -ne 0) { throw "Gradle task contract failed with exit code $LASTEXITCODE." }
+		} finally {
+			$env:GRADLE_USER_HOME = $originalGradleUserHome
+			$env:JAVA_HOME = $originalJavaHome
+			Remove-Item -LiteralPath $contractRoot -Recurse -Force -ErrorAction SilentlyContinue
+		}
+	}
 }
