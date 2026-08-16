@@ -312,11 +312,13 @@ function Test-ProductionReadinessPolicies {
 
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
+	$certificationWorkflowText = Get-Content -LiteralPath .\.github\workflows\certify-published.yml -Raw
 	$runtimeText = Get-Content -LiteralPath .\src\package-runtime.ps1 -Raw
 	$workflowRef = [regex]::Match($workflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
 	Assert-True $workflowRef.Success 'Package workflow does not pin Toolchain to an immutable commit.'
 	Assert-True ($installerText -match [regex]::Escape($workflowRef.Groups[1].Value)) 'Toolchain installer default does not match the workflow immutable commit.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
+	Assert-True ($certificationWorkflowText -match '(?m)^\s{6}- name: Install pinned Toolchain consumer\r?\n\s{8}shell: \$\{\{ matrix\.shell \}\}\s*$') 'Consumer certification installs Toolchain under a different PowerShell edition than it tests.'
 
 	$hardCodedRoots = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Select-String -Pattern '(?i)(?<![A-Za-z0-9_])\\{1,2}pkg(?:[\\/]|[''\"])')
 	Assert-True ($hardCodedRoots.Count -eq 0) "Package scripts contain hard-coded package roots: $($hardCodedRoots.Path -join ', ')"

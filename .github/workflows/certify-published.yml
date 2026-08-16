@@ -45,7 +45,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Toolchain consumer
-        shell: pwsh
+        shell: ${{ matrix.shell }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/install-toolchain.ps1
