@@ -34,13 +34,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/install-toolchain.ps1
 
+      - name: Install verified Cosign
+        shell: pwsh
+        run: ./.github/scripts/Install-VerifiedCosign.ps1
+
       - name: Read Cosign-verified health catalog
         id: fetch
         shell: pwsh
+        env:
+          TOOLCHAIN_COSIGN_VERIFY: '1'
+          TOOLCHAIN_COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
           New-Item -ItemType Directory -Path evidence -Force | Out-Null
           try {
-            $json = tlc remote health -Refresh -Json
+            $workflowRef = [string]$env:GITHUB_WORKFLOW_REF
+            $identities = @('build-push.yml','rescan-published.yml') | ForEach-Object {
+              "https://github.com/$($workflowRef -replace 'monitor-package-health\.yml', $_)"
+            }
+            $json = $null
+            foreach ($identity in $identities) {
+              $env:TOOLCHAIN_COSIGN_CERT_IDENTITY = $identity
+              $candidate = tlc remote health -Refresh -Json
+              $entries = @($candidate | ConvertFrom-Json)
+              if ($entries.Count -gt 0 -and -not @($entries | Where-Object Reason -match 'Live registry fallback|signed health metadata is unavailable')) {
+                $json = $candidate
+                break
+              }
+            }
+            if (-not $json) { throw 'No allowed workflow identity verified the signed package health catalog.' }
             [IO.File]::WriteAllText((Join-Path (Get-Location) 'evidence/health.json'), ([string]$json), [Text.UTF8Encoding]::new($false))
           } catch {
             '[]' | Set-Content -LiteralPath evidence/health.json -Encoding utf8
@@ -62,7 +83,7 @@ jobs:
           }
           if (Test-Path -LiteralPath evidence/fetch-error.txt) { $params.SourceErrorPath = 'evidence/fetch-error.txt' }
           $report = ./scripts/test-package-health-monitor.ps1 @params
-          "healthy=$([string]$report.healthy).ToLowerInvariant()" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "healthy=$(([bool]$report.healthy).ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Get-Content -LiteralPath evidence/report.md | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
 
       - name: Open, update, or close package health alert
@@ -72,18 +93,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEALTHY: ${{ steps.evaluate.outputs.healthy }}
         run: |
+          $repository = gh api "repos/$env:GITHUB_REPOSITORY" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect repository issue settings.' }
+          if (-not $repository.has_issues) {
+            Write-Warning 'GitHub Issues are disabled; the workflow summary and retained artifact are the package-health alert.'
+            'GitHub Issues are disabled, so alert synchronization was skipped.' | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
           $title = '[monitor] Package health alert'
           $issues = @(gh issue list --state open --limit 100 --json number,title | ConvertFrom-Json | Where-Object title -eq $title)
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list package health alert issues.' }
           if ($env:HEALTHY -eq 'true') {
             foreach ($issue in $issues) {
               gh issue close $issue.number --comment 'The signed package health catalog and all scan-freshness checks have recovered.'
+              if ($LASTEXITCODE -ne 0) { throw "Could not close package health alert issue $($issue.number)." }
             }
           } elseif ($issues.Count -gt 0) {
             gh issue edit $issues[0].number --body-file evidence/report.md
+            if ($LASTEXITCODE -ne 0) { throw "Could not update package health alert issue $($issues[0].number)." }
           } else {
             gh issue create --title $title --body-file evidence/report.md
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the package health alert issue.' }
           }
-          if ($LASTEXITCODE -ne 0) { throw 'Could not synchronize the package health alert issue.' }
 
       - name: Upload monitoring evidence
         if: always()
@@ -95,6 +126,6 @@ jobs:
           retention-days: 90
 
       - name: Enforce healthy catalog
-        if: ${{ steps.evaluate.outputs.healthy != 'true' }}
+        if: ${{ always() && (steps.evaluate.outcome != 'success' || steps.evaluate.outputs.healthy != 'true') }}
         shell: pwsh
         run: throw 'Signed package health monitoring reported one or more problems.'

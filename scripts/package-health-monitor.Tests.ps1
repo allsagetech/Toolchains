@@ -8,7 +8,29 @@ Describe 'Package health monitor' {
 		$script:json = Join-Path $script:root 'report.json'
 		$script:markdown = Join-Path $script:root 'report.md'
 		$script:monitor = Join-Path $PSScriptRoot 'test-package-health-monitor.ps1'
+		$script:merge = Join-Path $PSScriptRoot 'merge-package-health-scan-results.ps1'
 		$script:now = [datetime]'2026-08-16T12:00:00Z'
+	}
+
+	It 'preserves prior scan evidence and lets current signed scans replace it' {
+		$prior = Join-Path $script:root 'prior.json'
+		$evidence = Join-Path $script:root 'evidence'
+		$output = Join-Path $script:root 'scan-results.json'
+		New-Item -ItemType Directory -Path $evidence | Out-Null
+		@(
+			[ordered]@{ Name='demo'; State='available'; Reason=''; LastScannedAt='2026-08-10T10:00:00Z'; Digest=('sha256:' + ('a' * 64)) },
+			[ordered]@{ Name='never-scanned'; State='available'; Reason=''; LastScannedAt=$null; Digest=$null }
+		) | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $prior
+		[ordered]@{ package='demo'; state='available'; reason=''; scannedAt='2026-08-16T10:00:00Z'; digest=('sha256:' + ('b' * 64)) } |
+			ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'demo.health.json')
+
+		& $script:merge -PriorHealthPath $prior -EvidenceRoot $evidence -OutputPath $output
+		$result = Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+		$result.schemaVersion | Should -Be 1
+		@($result.results).Count | Should -Be 1
+		$result.results[0].package | Should -Be 'demo'
+		$result.results[0].digest | Should -Be ('sha256:' + ('b' * 64))
+		([datetime]$result.results[0].scannedAt).ToUniversalTime().ToString('o') | Should -Be '2026-08-16T10:00:00.0000000Z'
 	}
 
 	It 'accepts fresh available signed-catalog results' {

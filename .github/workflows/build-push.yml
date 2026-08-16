@@ -1032,6 +1032,24 @@ jobs:
             throw 'platform leaf alias does not contain its signed package digest'
           }
 
+      - name: Record successful vulnerability scan
+        if: steps.pkg.outputs.up-to-date == 'False'
+        shell: pwsh
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PUBLISHED_DIGEST: ${{ steps.publish.outputs.digest }}
+          TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+        run: |
+          if ($env:TRIVY_OUTCOME -ne 'success') { throw 'Cannot record an unsuccessful vulnerability scan.' }
+          if ($env:PUBLISHED_DIGEST -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Cannot record a scan without the promoted immutable digest.' }
+          [ordered]@{
+            package = $env:PACKAGE_NAME
+            state = 'available'
+            reason = ''
+            scannedAt = [datetime]::UtcNow.ToString('o')
+            digest = $env:PUBLISHED_DIGEST
+          } | ConvertTo-Json | Set-Content -LiteralPath "artifacts/$env:PACKAGE_NAME.health.json" -Encoding utf8
+
       - name: Upload release evidence
         if: always() && steps.pkg.outputs.up-to-date == 'False'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1041,6 +1059,7 @@ jobs:
             artifacts/${{ steps.pkg.outputs.name }}.spdx.json
             artifacts/${{ steps.pkg.outputs.name }}.provenance.json
             artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
+            artifacts/${{ steps.pkg.outputs.name }}.health.json
             ${{ steps.pkg.outputs.vex }}
           if-no-files-found: warn
           retention-days: 90
@@ -1225,18 +1244,59 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Checkout Toolchains
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install pinned Toolchain consumer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/install-toolchain.ps1
+      - name: Install verified Cosign
+        shell: pwsh
+        run: ./.github/scripts/Install-VerifiedCosign.ps1
       - name: Generate health catalog
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLCHAIN_COSIGN_VERIFY: '1'
+          TOOLCHAIN_COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
           $directory = Join-Path $env:RUNNER_TEMP 'health-catalog-plan'
           New-Item -ItemType Directory -Path $directory -Force | Out-Null
-          ./scripts/new-package-health-catalog.ps1 -OutputPath (Join-Path $directory 'catalog.json') -Repository $env:TLC_DOCKER_REPO
+          $priorPath = Join-Path $directory 'prior-health.json'
+          $workflowRef = [string]$env:GITHUB_WORKFLOW_REF
+          $identities = @(
+            "https://github.com/$workflowRef"
+            "https://github.com/$($workflowRef -replace 'build-push\.yml', 'rescan-published.yml')"
+          ) | Select-Object -Unique
+          $json = $null
+          foreach ($identity in $identities) {
+            $env:TOOLCHAIN_COSIGN_CERT_IDENTITY = $identity
+            $candidate = tlc remote health -Refresh -Json
+            $entries = @($candidate | ConvertFrom-Json)
+            if ($entries.Count -gt 0 -and -not @($entries | Where-Object Reason -match 'Live registry fallback|signed health metadata is unavailable')) {
+              $json = $candidate
+              break
+            }
+          }
+          if (-not $json) { throw 'Could not verify the prior signed package health catalog with an allowed workflow identity.' }
+          [IO.File]::WriteAllText($priorPath, ([string]$json), [Text.UTF8Encoding]::new($false))
+
+          $evidenceRoot = Join-Path $directory 'release-evidence'
+          New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+          gh run download $env:GITHUB_RUN_ID --pattern 'release-evidence-*' --dir $evidenceRoot
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host 'No current release scan evidence was published; preserving prior scan results.'
+            $global:LASTEXITCODE = 0
+          }
+          $scanResultsPath = Join-Path $directory 'scan-results.json'
+          ./scripts/merge-package-health-scan-results.ps1 -PriorHealthPath $priorPath -EvidenceRoot $evidenceRoot -OutputPath $scanResultsPath
+          ./scripts/new-package-health-catalog.ps1 -OutputPath (Join-Path $directory 'catalog.json') -Repository $env:TLC_DOCKER_REPO -ScanResultsPath $scanResultsPath
       - name: Upload health catalog plan
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
