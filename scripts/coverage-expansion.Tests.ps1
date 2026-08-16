@@ -168,11 +168,16 @@ Describe 'Docker publication behavior' {
 			$call = $args -join ' '
 			$script:DockerCalls.Add($call)
 			$global:LASTEXITCODE = 0
+			if ($call -like 'build *') {
+				Write-Error 'BuildKit progress on stderr' -ErrorAction Continue
+			}
 			if ($call -like 'image inspect*Config.Labels*') {
 				return '{"io.allsagetech.toolchain.specVersion":"1","io.allsagetech.toolchain.packageName":"fixture","io.allsagetech.toolchain.packageVersion":"1.2.3","io.allsagetech.toolchain.tlcPath":"/.tlc","io.allsagetech.toolchain.tlcSha256":"' + ((Get-FileHash -LiteralPath (Join-Path $script:TempRoot '.tlc') -Algorithm SHA256).Hash.ToLowerInvariant()) + '","toolchain.tlcPath":"/.tlc","toolchain.tlcSha256":"' + ((Get-FileHash -LiteralPath (Join-Path $script:TempRoot '.tlc') -Algorithm SHA256).Hash.ToLowerInvariant()) + '"}'
 			}
 		}
-		Invoke-DockerBuild -Tag 'example.test/t:1' -PkgName fixture -PkgVersion 1.2.3 -DockerfileName Dockerfile -Config @{}
+		$buildErrors = @()
+		Invoke-DockerBuild -Tag 'example.test/t:1' -PkgName fixture -PkgVersion 1.2.3 -DockerfileName Dockerfile -Config @{} -ErrorVariable +buildErrors
+		(($buildErrors | ForEach-Object { $_.ToString() }) -join "`n") | Should -Not -Match 'BuildKit progress on stderr'
 		($script:DockerCalls -join "`n") | Should -Match '^build '
 		Test-Path -LiteralPath (Join-Path $script:TempRoot '.dockerignore') | Should -BeTrue
 		Set-TlcPackageDockerignore -PkgRoot $script:TempRoot
