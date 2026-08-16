@@ -8,10 +8,19 @@ function Get-TlcMavenReleaseVersion {
 	param([Parameter(Mandatory=$true)]$Metadata)
 	$document = if ($Metadata -is [xml]) { $Metadata } else { [xml][string]$Metadata }
 	$value = [string]$document.metadata.versioning.release
-	if ($value -notmatch '^[0-9]+(?:\.[0-9]+){2,3}$') {
-		throw 'Maven metadata did not contain a valid release version.'
+	if ($value -match '^[0-9]+(?:\.[0-9]+){2,3}$') {
+		return [TlcSemanticVersion]::new($value)
 	}
-	return [TlcSemanticVersion]::new($value)
+
+	# Maven Central can temporarily point <release> at a prerelease (for example,
+	# Maven 4 RCs). Keep this stable package on the newest numeric version listed.
+	$stable = @($document.metadata.versioning.versions.version |
+		ForEach-Object { [string]$_ } |
+		Where-Object { $_ -match '^[0-9]+(?:\.[0-9]+){2,3}$' } |
+		ForEach-Object { [TlcSemanticVersion]::new($_) } |
+		Sort-Object -Property @{ Expression = { $_.Major }; Descending = $true }, @{ Expression = { $_.Minor }; Descending = $true }, @{ Expression = { $_.Patch }; Descending = $true }, @{ Expression = { $_.Build }; Descending = $true })
+	if ($stable.Count -eq 0) { throw 'Maven metadata did not contain a valid stable release version.' }
+	return $stable[0]
 }
 
 function Get-TlcVisualStudioBuildToolsRelease {

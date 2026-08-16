@@ -895,6 +895,8 @@ function Test-UpstreamMetadataParsers {
 	(Get-TlcMavenReleaseVersion -Metadata $mavenMetadata).ToString() | ForEach-Object {
 		Assert-True ($_ -eq '3.9.12') 'Maven metadata fixture did not select the declared release version.'
 	}
+	$prereleaseMavenMetadata = '<metadata><versioning><release>4.0.0-rc-6</release><versions><version>3.9.15</version><version>4.0.0-rc-6</version><version>3.9.16</version></versions></versioning></metadata>'
+	Assert-True ((Get-TlcMavenReleaseVersion -Metadata $prereleaseMavenMetadata).ToString() -eq '3.9.16') 'Maven metadata did not fall back from a declared prerelease to the newest stable version.'
 
 	$vsHistory = Get-Content -LiteralPath .\fixtures\upstream\vs-release-history.html -Raw
 	$latest = Get-TlcVisualStudioBuildToolsRelease -Content $vsHistory
