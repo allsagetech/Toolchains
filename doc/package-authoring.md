@@ -22,4 +22,4 @@ Use `RunsOn` and `PublishRunsOn` only when platform requirements differ from the
 
 If an upstream publisher offers neither a cryptographic digest nor a supported signature, set `TlcPackageConfig.VerifiedDownloads = $false` and provide `UnverifiedDownloadReason`. This is a quarantine marker, not an exception: strict smoke and release jobs refuse to build or publish the package until independent provenance is available. Do not disable strict download mode to release a quarantined package.
 
-Run `./scripts/test-toolchains.ps1` before submitting a change. Pull requests must also pass the representative Windows and Linux image smoke builds.
+Run `./scripts/test.ps1` before submitting a change, then regenerate `PACKAGE_INVENTORY.md` with `./scripts/export-package-inventory.ps1`. Pull requests must also pass the representative Windows and Linux image smoke builds. Windows PowerShell 5.1 compatibility remains covered by the dependency-free `./scripts/test-toolchains.ps1` path in CI.

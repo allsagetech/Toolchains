@@ -9,16 +9,13 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $repoRoot 'src/main.ps1')
 $descriptors = @()
-try {
-	foreach ($script in Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src/pkgs') -Recurse -File -Filter '*.ps1' | Sort-Object FullName) {
-		Clear-TlcPackageScript
-		& $script.FullName
-		Test-TlcPackageScript
-		$publication = Get-TlcPackagePublicationState
-		if (-not $publication.PublishEligible -or -not $TlcPackageConfig.CanonicalName -or -not $TlcPackageConfig.Platform) { continue }
-		$descriptors += [pscustomobject]@{ Name = [string]$TlcPackageConfig.Name; CanonicalName = [string]$TlcPackageConfig.CanonicalName; Platform = [string]$TlcPackageConfig.Platform }
-	}
-} finally { Clear-TlcPackageScript }
+$packagePaths = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src/pkgs') -Recurse -File -Filter '*.ps1' | Sort-Object FullName | ForEach-Object FullName)
+foreach ($descriptor in Read-TlcPackageDescriptors -Path $packagePaths) {
+	$config = $descriptor.Config
+	$publication = Get-TlcPackagePublicationState -Config $config
+	if (-not $publication.PublishEligible -or -not $config.CanonicalName -or -not $config.Platform) { continue }
+	$descriptors += [pscustomobject]@{ Name = [string]$config.Name; CanonicalName = [string]$config.CanonicalName; Platform = [string]$config.Platform }
+}
 $tags = if ($PSBoundParameters.ContainsKey('Tags')) { @($Tags) } else { @((Get-DockerTags $Repository).tags) }
 $indexes = @()
 foreach ($group in $descriptors | Group-Object CanonicalName | Sort-Object Name) {

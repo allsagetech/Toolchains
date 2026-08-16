@@ -101,7 +101,7 @@ function global:Write-GptOssLayeredDockerfile {
     $blobsPath = Join-Path $CacheSlug 'blobs'
 
     $dockerLines = @(
-        'FROM ubuntu:22.04',
+        'FROM ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f',
         'COPY .tlc /.tlc',
         'COPY official-models.manifest.json /official-models.manifest.json'
     )
@@ -356,7 +356,7 @@ function global:Invoke-CustomDockerBuild($tag) {
         throw "Layered Dockerfile not found: $dockerfilePath"
     }
 
-    $args = @('build', '-f', $dockerfilePath, '-t', $tag)
+    $dockerArguments = @('build', '-f', $dockerfilePath, '-t', $tag)
     $labels = @(
         "io.allsagetech.toolchain.packageName=$($TlcPackageConfig.Name)",
         "io.allsagetech.toolchain.packageVersion=$($TlcPackageConfig.Version)",
@@ -367,11 +367,11 @@ function global:Invoke-CustomDockerBuild($tag) {
         "toolchain.tlcSha256=$defHash"
     )
     foreach ($label in $labels) {
-        $args += @('--label', $label)
+        $dockerArguments += @('--label', $label)
     }
-    $args += @($pkgRoot)
+    $dockerArguments += @($pkgRoot)
 
-    & docker @args
+    & docker @dockerArguments
     if ($LASTEXITCODE -ne 0) {
         throw "docker build failed with exit code $LASTEXITCODE for $tag"
     }

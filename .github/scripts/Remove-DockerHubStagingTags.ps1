@@ -61,7 +61,7 @@ function Invoke-DockerHubApi {
 			return Invoke-RestMethod @params
 		} catch {
 			$statusCode = $null
-			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { Write-Debug "HTTP status was unavailable: $($_.Exception.Message)" }
 			if ($AllowNotFound -and $statusCode -eq 404) { return $null }
 			$transient = (-not $statusCode) -or $statusCode -eq 408 -or $statusCode -eq 429 -or $statusCode -ge 500
 			if (-not $transient -or $attempt -eq 4) { throw }

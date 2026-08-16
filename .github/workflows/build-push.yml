@@ -67,14 +67,12 @@ jobs:
           . .\src\main.ps1
 
           function New-MatrixEntry([IO.FileInfo]$Script, [bool]$ForceBuild) {
-            Clear-TlcPackageScript
-            & $Script.FullName
-            Test-TlcPackageScript
+            $config = (Read-TlcPackageDescriptor -Path $Script.FullName).Config
 
-            $runsOn = Get-TlcPackageRunsOn
-            $publishRunsOn = Get-TlcPackagePublishRunsOn
-            $tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-            $publicationState = Get-TlcPackagePublicationState
+            $runsOn = Get-TlcPackageRunsOn -Config $config
+            $publishRunsOn = Get-TlcPackagePublishRunsOn -Config $config
+            $tier = if ($config.Tier) { [string]$config.Tier } else { 'tooling' }
+            $publicationState = Get-TlcPackagePublicationState -Config $config
             [pscustomobject]@{
               package = $Script.FullName.Replace((Get-Location).Path, '.')
               runs_on = $runsOn
@@ -84,7 +82,7 @@ jobs:
               verified_downloads = $publicationState.VerifiedDownloads
               publish_eligible = $publicationState.PublishEligible
               quarantine_reason = $publicationState.QuarantineReason
-              unverified_download_reason = if ($publicationState.VerifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
+              unverified_download_reason = if ($publicationState.VerifiedDownloads) { '' } else { [string]$config.UnverifiedDownloadReason }
               pkg_root = Get-TlcPkgRootForRunner -RunsOn $runsOn
               cache_path = Get-TlcCachePathForRunner -RunsOn $runsOn
               publish_pkg_root = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn
@@ -244,7 +242,6 @@ jobs:
             }
           }
 
-          Clear-TlcPackageScript
           $matrix = ConvertTo-Json @{ include = @($entries) } -Depth 50 -Compress
           "matrix=$matrix" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $hasPackages = ([bool](@($entries).Count -gt 0)).ToString().ToLowerInvariant()
@@ -276,17 +273,12 @@ jobs:
       - name: Validate scripts and package metadata (PowerShell 7)
         if: matrix.shell == 'pwsh'
         shell: pwsh
-        run: .\scripts\test-toolchains.ps1
+        run: .\scripts\test.ps1
 
       - name: Validate scripts and package metadata (Windows PowerShell 5.1)
         if: matrix.shell == 'powershell'
         shell: powershell
         run: .\scripts\test-toolchains.ps1
-
-      - name: Validate versioned package specification (PowerShell 7)
-        if: matrix.shell == 'pwsh'
-        shell: pwsh
-        run: .\scripts\test-package-spec.ps1
 
       - name: Validate versioned package specification (Windows PowerShell 5.1)
         if: matrix.shell == 'powershell'
@@ -301,16 +293,13 @@ jobs:
           . .\src\main.ps1
           $quarantined = @()
           foreach ($script in Get-ChildItem -Path .\src\pkgs -Filter *.ps1 -Recurse -File) {
-            Clear-TlcPackageScript
-            & $script.FullName
-            Test-TlcPackageScript
-            $publicationState = Get-TlcPackagePublicationState
+            $config = (Read-TlcPackageDescriptor -Path $script.FullName).Config
+            $publicationState = Get-TlcPackagePublicationState -Config $config
             if (-not $publicationState.PublishEligible) {
-              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $($publicationState.QuarantineReason)"
-              $quarantined += $TlcPackageConfig.Name
+              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($config.Name): $($publicationState.QuarantineReason)"
+              $quarantined += $config.Name
             }
           }
-          Clear-TlcPackageScript
           Write-Host "Quarantined package count: $($quarantined.Count)"
 
       - name: Report packages quarantined from publication (Windows PowerShell 5.1)
@@ -321,16 +310,13 @@ jobs:
           . .\src\main.ps1
           $quarantined = @()
           foreach ($script in Get-ChildItem -Path .\src\pkgs -Filter *.ps1 -Recurse -File) {
-            Clear-TlcPackageScript
-            & $script.FullName
-            Test-TlcPackageScript
-            $publicationState = Get-TlcPackagePublicationState
+            $config = (Read-TlcPackageDescriptor -Path $script.FullName).Config
+            $publicationState = Get-TlcPackagePublicationState -Config $config
             if (-not $publicationState.PublishEligible) {
-              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($TlcPackageConfig.Name): $($publicationState.QuarantineReason)"
-              $quarantined += $TlcPackageConfig.Name
+              Write-Output "::warning file=$($script.FullName),title=Publication quarantined::$($config.Name): $($publicationState.QuarantineReason)"
+              $quarantined += $config.Name
             }
           }
-          Clear-TlcPackageScript
           Write-Host "Quarantined package count: $($quarantined.Count)"
 
   scanner-smoke:
@@ -470,37 +456,24 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           . .\src\main.ps1
-          Clear-TlcPackageScript
           $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
-          & $scriptPath
-          Test-TlcPackageScript
-
-          Invoke-TlcInit
-          $TlcPackageConfig.Latest = [TlcSemanticVersion]::new()
-          $TlcPackageConfig.Tags = @()
-          $TlcPackageConfig.UpToDate = $false
-          Install-TlcPackage
-          if ($TlcPackageConfig.UpToDate) {
-            throw 'A forced PR smoke build marked itself up-to-date without producing a package.'
-          }
-          Test-TlcPackageInstall
+          $config = Invoke-TlcPackageLifecycle -Path $scriptPath -Force
           Assert-TlcDefinitionFile | Out-Null
 
           $dockerIgnore = Join-Path $env:TLC_PKG_ROOT '.dockerignore'
           if (-not (Test-Path -LiteralPath $dockerIgnore)) {
             @('cache/','_stage/','artifacts/','*.tmp') | Set-Content -LiteralPath $dockerIgnore -Encoding utf8
           }
-          $safeVersion = ([string]$TlcPackageConfig.Version).Replace('+','_')
-          $imageRef = "toolchains-pr-smoke:$($TlcPackageConfig.Name)-$safeVersion-$env:GITHUB_RUN_ID"
-          $dockerfileName = if ($TlcPackageConfig.Dockerfile) { [string]$TlcPackageConfig.Dockerfile } else { $null }
-          Invoke-DockerBuild $imageRef $TlcPackageConfig.Name $TlcPackageConfig.Version $dockerfileName
+          $safeVersion = ([string]$config.Version).Replace('+','_')
+          $imageRef = "toolchains-pr-smoke:$($config.Name)-$safeVersion-$env:GITHUB_RUN_ID"
+          Invoke-TlcPackageImageBuild -Path $scriptPath -ImageRef $imageRef -Name $config.Name -Version $config.Version
           $imageId = (& docker image inspect --format '{{.Id}}' $imageRef | Out-String).Trim()
           if ($LASTEXITCODE -ne 0 -or -not $imageId) { throw "Could not resolve image ID for $imageRef" }
 
           "image=$imageRef" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "image-id=$imageId" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "name=$($config.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($config.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Validate exact image with pinned Toolchain contract
         shell: pwsh
@@ -578,8 +551,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           . .\src\main.ps1
-          Clear-TlcPackageScript
-          Invoke-TlcScript (Resolve-Path '${{ matrix.package }}').Path
+          $null = Invoke-TlcPackageLifecycle -Path (Resolve-Path '${{ matrix.package }}').Path
 
       - name: Scan Windows package payload
         if: runner.os == 'Windows'
@@ -680,15 +652,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           . .\src\main.ps1
-          Clear-TlcPackageScript
-          Invoke-TlcScript (Resolve-Path '${{ matrix.package }}').Path
+          $config = Invoke-TlcPackageLifecycle -Path (Resolve-Path '${{ matrix.package }}').Path
 
-          "up-to-date=$([bool]$TlcPackageConfig.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "name=$($TlcPackageConfig.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "version=$($TlcPackageConfig.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "vex=$([string]$TlcPackageConfig.Vex)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "canonical-name=$([string]$TlcPackageConfig.CanonicalName)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "platform=$([string]$TlcPackageConfig.Platform)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "up-to-date=$([bool]$config.UpToDate)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "name=$($config.Name)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($config.Version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "vex=$([string]$config.Vex)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "canonical-name=$([string]$config.CanonicalName)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "platform=$([string]$config.Platform)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Scan Windows package payload
         if: runner.os == 'Windows' && steps.pkg.outputs.up-to-date == 'False'
@@ -732,20 +703,18 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           . .\src\main.ps1
-          Clear-TlcPackageScript
-          & (Resolve-Path '${{ matrix.package }}').Path
-          $TlcPackageConfig.Name = '${{ steps.pkg.outputs.name }}'
-          $TlcPackageConfig.Version = '${{ steps.pkg.outputs.version }}'
+          $scriptPath = (Resolve-Path '${{ matrix.package }}').Path
+          $packageName = '${{ steps.pkg.outputs.name }}'
+          $packageVersion = '${{ steps.pkg.outputs.version }}'
 
           $dockerIgnore = Join-Path $env:TLC_PKG_ROOT '.dockerignore'
           if (-not (Test-Path -LiteralPath $dockerIgnore)) {
             @('cache/','_stage/','artifacts/','*.tmp') | Set-Content -LiteralPath $dockerIgnore -Encoding utf8
           }
 
-          $safeVersion = ([string]$TlcPackageConfig.Version).Replace('+','_')
-          $candidate = "toolchains-candidate:$($TlcPackageConfig.Name)-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $dockerfileName = if ($TlcPackageConfig.Dockerfile) { [string]$TlcPackageConfig.Dockerfile } else { $null }
-          Invoke-DockerBuild $candidate $TlcPackageConfig.Name $TlcPackageConfig.Version $dockerfileName
+          $safeVersion = $packageVersion.Replace('+','_')
+          $candidate = "toolchains-candidate:$packageName-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Invoke-TlcPackageImageBuild -Path $scriptPath -ImageRef $candidate -Name $packageName -Version $packageVersion
           $imageId = (& docker image inspect --format '{{.Id}}' $candidate | Out-String).Trim()
           if ($LASTEXITCODE -ne 0 -or -not $imageId) { throw "Could not resolve image ID for $candidate" }
 

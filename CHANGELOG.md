@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add a Pester-based quality gate with structured test results, core-code coverage enforcement, exact test dependency versions, actionable static analysis, and a generated package inventory.
 - Add integrity-checked Windows and Linux packages for kind, k3d, and kubectl to support Toolchain-managed local Kubernetes clusters.
 - Add checksum-verified Windows and Linux K9s packages for the `toolchain k9s` cluster UI command.
 - Add a Windows Docker Desktop bootstrap package that discovers Docker's current release, downloads it directly from Docker, verifies its SHA-256 and Authenticode publisher, and keeps license acceptance explicit.
@@ -11,9 +12,11 @@
 - Add signed package-health catalog publication, weekly durable-tag rescans, and clean consumer/cluster certification workflows.
 - Add canonical signed multi-platform OCI indexes while retaining platform-specific compatibility aliases.
 - Add checksum-verified Windows and Linux packages for Cosign, ORAS, Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal.
+- Add deterministic offline release rehearsals, catalog performance budgets, and automated container-base digest refresh pull requests.
 
 ### Security
 
+- Pin Windows and layered Linux container bases by digest, reject malformed semantic versions, and isolate descriptor reads so global package state cannot leak between inventory operations.
 - Verify downloaded package inputs and cache hits before execution.
 - Rebuild K9s 0.51.0 for Windows and Linux from checksum-database-verified Go modules with a patched Go toolchain and dependency graph.
 - Rebuild kubectl for Windows and Linux from checksum-verified Go modules with patched Go, `x/net`, `x/sys`, and `x/text` dependencies.
@@ -22,6 +25,7 @@
 - Exclude caches and temporary build content from published images.
 - Fail closed when signing or compatibility contracts are required.
 - Reduce CI permissions and secret exposure to protected release jobs.
+- Confine legacy descriptor state to disposable runspaces and remove the remaining process-global asset hash cache.
 
 ### Changed
 
@@ -47,3 +51,4 @@
 - Consolidate Node and Adoptium version families behind shared package logic.
 - Prefer official GitHub or machine-readable Maven metadata and fixture-test the remaining Visual Studio release parser.
 - Split shared network behavior from general package utilities and automate package-contract synchronization.
+- Split cache, definition, local-execution, and descriptor-runtime responsibilities out of the shared utility layer.

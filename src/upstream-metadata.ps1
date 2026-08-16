@@ -65,7 +65,7 @@ function Get-TlcDockerDesktopRelease {
 		if (-not [long]::TryParse([string]$artifact.Length, [ref]$length) -or $length -le 0) { return }
 
 		$releaseDate = [string]$item.Date
-		try { $releaseDate = ([datetime]$item.Date).ToUniversalTime().ToString('o') } catch { }
+		try { $releaseDate = ([datetime]$item.Date).ToUniversalTime().ToString('o') } catch { Write-Debug "Release date is not parseable; preserving upstream value: $($_.Exception.Message)" }
 
 		[pscustomobject]@{
 			Version = [TlcSemanticVersion]::new($versionText)

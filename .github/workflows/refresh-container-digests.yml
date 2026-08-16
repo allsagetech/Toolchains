@@ -1,0 +1,53 @@
+name: Refresh container base digests
+
+on:
+  schedule:
+    - cron: '23 7 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: refresh-container-digests
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+
+      - name: Resolve current registry digests
+        shell: pwsh
+        run: ./scripts/update-container-base-digests.ps1
+
+      - name: Commit and open a pull request when pins changed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git diff --quiet
+          if ($LASTEXITCODE -eq 0) { Write-Host 'Container base digests are current.'; exit 0 }
+          $branch = 'automation/container-base-digests'
+          $remoteLine = @(git ls-remote origin "refs/heads/$branch" | Select-Object -First 1)
+          $remoteHash = if ($remoteLine.Count -eq 1) { ([string]$remoteLine[0] -split '\s+')[0] } else { $null }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --create $branch
+          git add Dockerfile src/util.ps1 src/pkgs/openai-gpt-oss-20b.ps1
+          git commit -m 'chore: refresh container base digests'
+          if ($remoteHash) {
+            git push "--force-with-lease=refs/heads/$branch`:$remoteHash" origin "HEAD:refs/heads/$branch"
+          } else {
+            git push origin "HEAD:refs/heads/$branch"
+          }
+          $existing = gh pr list --head $branch --state open --json url --jq '.[0].url'
+          if ($existing) { Write-Host "Updated $existing" }
+          else { gh pr create --head $branch --base '${{ github.event.repository.default_branch }}' --title 'chore: refresh container base digests' --body 'Automated refresh of immutable Windows Nano Server and Ubuntu base-image digests.' }

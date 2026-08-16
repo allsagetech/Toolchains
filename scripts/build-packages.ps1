@@ -46,21 +46,10 @@ Get-ChildItem -Recurse .\src\pkgs\ -Filter *.ps1 | ForEach-Object {
 
   $env:TLC_STAGE_ROOT = $stageRoot
 
-  Clear-TlcPackageScript
-  Invoke-TlcScript $_.FullName
+	$config = Invoke-TlcPackageLifecycle -Path $_.FullName -Publish
 
-  $upToDate = $false
-  if ($null -ne $TlcPackageConfig) {
-    $p = $TlcPackageConfig.PSObject.Properties["UpToDate"]
-    if ($null -ne $p) { $upToDate = [bool]$p.Value }
-  }
-
-  if (-not $upToDate) {
-    Test-TlcPackageInstall
-    Assert-TlcDefinitionFile | Out-Null
-    Invoke-DockerPush $TlcPackageConfig.Name $TlcPackageConfig.Version
-    if ($LASTEXITCODE -ne 0) { throw "Invoke-DockerPush failed (exit code $LASTEXITCODE)" }
-    Write-Host "Pushed: $($TlcPackageConfig.Name) $($TlcPackageConfig.Version)"
+  if (-not $config.UpToDate) {
+    Write-Host "Pushed: $($config.Name) $($config.Version)"
   } else {
     Write-Host "Skip: $($_.Name) up-to-date"
   }

@@ -5,6 +5,10 @@ Copyright (c) 2026 AllSageTech
 SPDX-License-Identifier: MPL-2.0
 #>
 
+if (-not $script:TlcKnownAssetSha256) {
+	$script:TlcKnownAssetSha256 = @{}
+}
+
 function Get-TlcBrowserUserAgent {
 	if ($env:TLC_USER_AGENT) { return [string]$env:TLC_USER_AGENT }
 	return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -55,13 +59,13 @@ function Invoke-TlcRestMethod {
 			return (Invoke-RestMethod @Params)
 		} catch {
 			$statusCode = $null
-			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { Write-Debug "HTTP status was unavailable: $($_.Exception.Message)" }
 			if ($statusCode -and $statusCode -ge 400 -and $statusCode -lt 500 -and ($statusCode -notin 408, 429)) { throw }
 
 			if ($attempt -ge $MaxRetries) { throw }
 			$delay = [math]::Min(60, $RetryDelaySeconds * [math]::Pow(2, ($attempt - 1)))
 			$retryAfter = $null
-			try { $retryAfter = $_.Exception.Response.Headers['Retry-After'] } catch { }
+			try { $retryAfter = $_.Exception.Response.Headers['Retry-After'] } catch { Write-Debug "Retry-After was unavailable: $($_.Exception.Message)" }
 			if ($retryAfter) {
 				[int]$raSec = 0
 				if ([int]::TryParse([string]$retryAfter, [ref]$raSec)) {
@@ -71,7 +75,7 @@ function Invoke-TlcRestMethod {
 						$raDate = [datetime]::Parse([string]$retryAfter)
 						$raDelta = [int]([math]::Ceiling(($raDate.ToUniversalTime() - [datetime]::UtcNow).TotalSeconds))
 						if ($raDelta -gt 0) { $delay = [math]::Max($delay, $raDelta) }
-					} catch { }
+					} catch { Write-Debug "Retry-After was not a valid HTTP date: $($_.Exception.Message)" }
 				}
 			}
 			Write-Host "request failed (attempt $attempt/$MaxRetries); retrying in $delay sec: $($_.Exception.Message)"
@@ -97,8 +101,8 @@ function Invoke-TlcWebRequest {
 	)
 	$ErrorActionPreference = 'Stop'
 	$hasUseBasicParsing = (Get-Command Invoke-WebRequest).Parameters.ContainsKey('UseBasicParsing')
-	if ($OutFile -and -not $ExpectedSha256 -and -not $ExpectedHash -and $global:TlcKnownAssetSha256 -and $global:TlcKnownAssetSha256.ContainsKey($Uri)) {
-		$ExpectedSha256 = [string]$global:TlcKnownAssetSha256[$Uri]
+	if ($OutFile -and -not $ExpectedSha256 -and -not $ExpectedHash -and $script:TlcKnownAssetSha256.ContainsKey($Uri)) {
+		$ExpectedSha256 = [string]$script:TlcKnownAssetSha256[$Uri]
 	}
 	if ($OutFile -and -not $ExpectedSha256 -and -not $ExpectedHash -and ([Uri]$Uri).Host -eq 'github.com') {
 		$ExpectedSha256 = Get-TlcGitHubReleaseAssetSha256 -Uri $Uri
@@ -167,13 +171,13 @@ function Invoke-TlcWebRequest {
 		} catch {
 			if ($downloadTemp) { Remove-Item -LiteralPath $downloadTemp -Force -ErrorAction SilentlyContinue }
 			$statusCode = $null
-			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { Write-Debug "HTTP status was unavailable: $($_.Exception.Message)" }
 			if ($statusCode -and $statusCode -ge 400 -and $statusCode -lt 500 -and ($statusCode -notin 408, 429)) { throw }
 
 			if ($attempt -ge $MaxRetries) { throw }
 			$delay = [math]::Min(60, $RetryDelaySeconds * [math]::Pow(2, ($attempt - 1)))
 			$retryAfter = $null
-			try { $retryAfter = $_.Exception.Response.Headers['Retry-After'] } catch { }
+			try { $retryAfter = $_.Exception.Response.Headers['Retry-After'] } catch { Write-Debug "Retry-After was unavailable: $($_.Exception.Message)" }
 			if ($retryAfter) {
 				[int]$raSec = 0
 				if ([int]::TryParse([string]$retryAfter, [ref]$raSec)) {
@@ -183,7 +187,7 @@ function Invoke-TlcWebRequest {
 						$raDate = [datetime]::Parse([string]$retryAfter)
 						$raDelta = [int]([math]::Ceiling(($raDate.ToUniversalTime() - [datetime]::UtcNow).TotalSeconds))
 						if ($raDelta -gt 0) { $delay = [math]::Max($delay, $raDelta) }
-					} catch { }
+					} catch { Write-Debug "Retry-After was not a valid HTTP date: $($_.Exception.Message)" }
 				}
 			}
 			Write-Host "request failed (attempt $attempt/$MaxRetries); retrying in $delay sec: $($_.Exception.Message)"

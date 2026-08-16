@@ -34,19 +34,16 @@ if (-not (Test-Path -LiteralPath $packageRoot -PathType Container)) { throw "Too
 . $mainScript
 $descriptorStates = @()
 foreach ($script in @(Get-ChildItem -LiteralPath $packageRoot -Filter '*.ps1' -Recurse -File | Sort-Object FullName)) {
-	Clear-TlcPackageScript
-	& $script.FullName
-	Test-TlcPackageScript
-	$state = Get-TlcPackagePublicationState
+	$config = (Read-TlcPackageDescriptor -Path $script.FullName).Config
+	$state = Get-TlcPackagePublicationState -Config $config
 	$descriptorStates += [pscustomobject]@{
-		Name = [string]$TlcPackageConfig.Name
-		Matcher = [string]$TlcPackageConfig.Matcher
+		Name = [string]$config.Name
+		Matcher = [string]$config.Matcher
 		PublishEligible = [bool]$state.PublishEligible
 		Reason = [string]$state.QuarantineReason
 		Script = $script.FullName
 	}
 }
-Clear-TlcPackageScript
 
 $rules = [Collections.Generic.List[object]]::new()
 foreach ($group in @($descriptorStates | Group-Object Name | Sort-Object Name)) {
@@ -107,7 +104,7 @@ function Invoke-DockerHubApi {
 			return Invoke-RestMethod @params
 		} catch {
 			$statusCode = $null
-			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { Write-Debug "HTTP status was unavailable: $($_.Exception.Message)" }
 			if ($AllowNotFound -and $statusCode -eq 404) { return $null }
 			$transient = (-not $statusCode) -or $statusCode -eq 408 -or $statusCode -eq 429 -or $statusCode -ge 500
 			if (-not $transient -or $attempt -eq 4) { throw }

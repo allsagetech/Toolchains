@@ -20,19 +20,13 @@ if ($Repository -notmatch '^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$') {
 }
 
 $configs = @()
-try {
-	$packageScripts = Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Sort-Object FullName
-	foreach ($packageScript in $packageScripts) {
-		Clear-TlcPackageScript
-		& $packageScript.FullName
-		Test-TlcPackageScript
-		$configs += ,[pscustomobject]@{
-			Name = [string]$TlcPackageConfig.Name
-			Tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-		}
+$packageScripts = Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Sort-Object FullName
+foreach ($descriptor in Read-TlcPackageDescriptors -Path @($packageScripts.FullName)) {
+	$config = $descriptor.Config
+	$configs += ,[pscustomobject]@{
+		Name = [string]$config.Name
+		Tier = if ($config.Tier) { [string]$config.Tier } else { 'tooling' }
 	}
-} finally {
-	Clear-TlcPackageScript
 }
 
 $modelPackages = @(Get-TlcModelCategoryPackages -PackageConfigs $configs)

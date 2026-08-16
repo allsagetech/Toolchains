@@ -23,16 +23,14 @@ if ($ScanResultsPath -and (Test-Path -LiteralPath $ScanResultsPath -PathType Lea
 
 $tags = @((Get-DockerTags $Repository).tags)
 $records = @()
-try {
-	foreach ($script in Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src/pkgs') -Recurse -File -Filter '*.ps1' | Sort-Object FullName) {
-		Clear-TlcPackageScript
-		& $script.FullName
-		Test-TlcPackageScript
-		$publication = Get-TlcPackagePublicationState
-		$name = [string]$TlcPackageConfig.Name
-		$canonicalName = if ($TlcPackageConfig.CanonicalName) { [string]$TlcPackageConfig.CanonicalName } else { $name }
-		$platform = if ($TlcPackageConfig.Platform) { [string]$TlcPackageConfig.Platform } elseif (Test-TlcRunsOnUbuntu -RunsOn (Get-TlcPackageRunsOn)) { 'linux/amd64' } else { 'windows/amd64' }
-		$matcher = if ($TlcPackageConfig.Matcher) { [string]$TlcPackageConfig.Matcher } else { "^$([regex]::Escape($name))-([0-9].+)$" }
+$packagePaths = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src/pkgs') -Recurse -File -Filter '*.ps1' | Sort-Object FullName | ForEach-Object FullName)
+foreach ($descriptor in Read-TlcPackageDescriptors -Path $packagePaths) {
+		$config = $descriptor.Config
+		$publication = Get-TlcPackagePublicationState -Config $config
+		$name = [string]$config.Name
+		$canonicalName = if ($config.CanonicalName) { [string]$config.CanonicalName } else { $name }
+		$platform = if ($config.Platform) { [string]$config.Platform } elseif (Test-TlcRunsOnUbuntu -RunsOn (Get-TlcPackageRunsOn -Config $config)) { 'linux/amd64' } else { 'windows/amd64' }
+		$matcher = if ($config.Matcher) { [string]$config.Matcher } else { "^$([regex]::Escape($name))-([0-9].+)$" }
 		$versions = @($tags | Where-Object { $_ -match $matcher } | ForEach-Object {
 			if ($_ -match "^$([regex]::Escape($name))-(.+)$") { $Matches[1].Replace('_', '+') }
 		} | Where-Object { $_ } | Sort-Object -Unique)
@@ -48,10 +46,9 @@ try {
 			versions = $versions
 			lastScannedAt = if ($scan -and $scan.scannedAt) { [string]$scan.scannedAt } else { $null }
 			digest = if ($scan -and $scan.digest) { [string]$scan.digest } else { $null }
-			upstream = if ($TlcPackageConfig.Upstream) { [string]$TlcPackageConfig.Upstream } else { $null }
+			upstream = if ($config.Upstream) { [string]$config.Upstream } else { $null }
 		}
-	}
-} finally { Clear-TlcPackageScript }
+}
 
 $packages = foreach ($group in $records | Group-Object canonicalName | Sort-Object Name) {
 	$members = @($group.Group)

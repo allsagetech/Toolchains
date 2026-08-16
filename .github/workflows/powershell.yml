@@ -1,26 +1,16 @@
 # <#
-# Toolchain
-# Copyright (c) 2021 - 02-08-2026 U.S. Federal Government
+# Toolchains
 # Copyright (c) 2026 AllSageTech
 # SPDX-License-Identifier: MPL-2.0
 # #>
 
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-#
-# https://github.com/microsoft/action-psscriptanalyzer
-# For more information on PSScriptAnalyzer in general, see
-# https://github.com/PowerShell/PSScriptAnalyzer
-
-name: PSScriptAnalyzer
+name: PowerShell quality
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
     - cron: '23 15 * * 6'
 
@@ -32,27 +22,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
-    permissions:
-      contents: read
-      security-events: write
-    name: PSScriptAnalyzer
-    runs-on: ubuntu-latest
+  quality:
+    name: Tests, coverage, and static analysis
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Run PSScriptAnalyzer
-        uses: microsoft/psscriptanalyzer-action@6b2948b1944407914a58661c49941824d149734f # v1.1
+      - name: Run repository quality gate
+        shell: pwsh
+        run: ./scripts/test.ps1
+
+      - name: Upload structured quality results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: .\
-          recurse: true 
-          includeRule: '"PSAvoidGlobalAliases", "PSAvoidUsingConvertToSecureStringWithPlainText"'
-          output: results.sarif
-      
-      - name: Upload SARIF results file
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: github/codeql-action/upload-sarif@641a925cfafe92d0fdf8b239ba4053e3f8d99d6d # v3
-        with:
-          sarif_file: results.sarif
+          name: powershell-quality-results
+          path: |
+            coverage.xml
+            test-results.xml
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,6 +1,16 @@
 # toolchains
 The package building repository for [Toolchain](https://github.com/allsagetech/toolchain).
 
+## Quick start
+
+Run the complete local quality gate (Pester, static analysis, contract fixtures, and enforced coverage):
+
+```powershell
+pwsh -NoLogo -NoProfile -File ./scripts/test.ps1
+```
+
+Package authors should start with [`doc/package-authoring.md`](doc/package-authoring.md). The generated [`PACKAGE_INVENTORY.md`](PACKAGE_INVENTORY.md) lists every descriptor, platform, tier, and publication state. Release and trust boundaries are documented in [`doc/release-process.md`](doc/release-process.md) and [`doc/architecture.md`](doc/architecture.md).
+
 ## Licensing note
 - Versions released before 02-08-2026 were distributed under the MIT License (see `LICENSES/OLD-MIT.txt`).
 - Versions released on or after 02-09-2026 are distributed under the Mozilla Public License 2.0 (see `LICENSE.md`).
@@ -101,8 +111,10 @@ Notes:
 Run local validation without building packages:
 
 ```powershell
-pwsh -NoLogo -NoProfile -File ./scripts/test-toolchains.ps1
+pwsh -NoLogo -NoProfile -File ./scripts/test.ps1
 ```
+
+For the dependency-free legacy validation path (including Windows PowerShell 5.1), run `./scripts/test-toolchains.ps1`.
 
 Package authors must follow the lifecycle, checksum, package-root, and configuration rules in [`doc/package-authoring.md`](doc/package-authoring.md). The immutable build/scan/contract/sign/promotion sequence is documented in [`doc/release-process.md`](doc/release-process.md), and self-hosted runners should follow [`doc/cache-migration.md`](doc/cache-migration.md).
 

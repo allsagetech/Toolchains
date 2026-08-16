@@ -2,6 +2,18 @@
 
 > This CONTRIBUTING.md is for software contributions. You do not need to follow the Developer's Certificate of Origin (DCO) process for commenting on repository documentation or for submitting issues.
 
+## Project workflow
+
+Before opening a pull request:
+
+1. Read [`doc/package-authoring.md`](doc/package-authoring.md) for descriptor lifecycle, integrity, platform, and quarantine rules.
+2. Run `pwsh -NoLogo -NoProfile -File ./scripts/test.ps1` from the repository root.
+3. If package descriptors changed, regenerate `PACKAGE_INVENTORY.md` with `./scripts/export-package-inventory.ps1`.
+4. If a managed container base changed, run `./scripts/update-container-base-digests.ps1 -Check`; the scheduled refresh workflow opens an update pull request when a pin becomes stale.
+5. Sign every commit with `git commit --signoff` to record the DCO certification described below.
+
+Do not bypass verified-download or publication-quarantine checks. The release workflow, not package descriptors, owns building, scanning, signing, and tag promotion.
+
 ## Policy
 
 ### 1. Introduction

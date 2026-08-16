@@ -2,6 +2,10 @@
 
 Toolchains releases use immutable artifact promotion:
 
+Every validation run first performs an offline release rehearsal over the complete descriptor inventory. The rehearsal enforces the catalog performance budget, quarantine reasons, unambiguous matchers for versioned package families, runner selection, model classification, and a deterministic matrix fingerprint without contacting or mutating a registry.
+
+Managed container bases are pinned by digest. A scheduled workflow resolves their canonical registry digests and opens or updates an automation pull request; `./scripts/update-container-base-digests.ps1 -Check` provides the same fail-closed verification locally.
+
 1. resolve and verify upstream source versions and checksums;
 2. stage package content in an isolated package root;
 3. build the OCI image once and record its digest;

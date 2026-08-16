@@ -111,7 +111,7 @@ function Invoke-TlcJsonRequest {
 			return Invoke-RestMethod @params
 		} catch {
 			$statusCode = $null
-			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+			try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { Write-Debug "HTTP status was unavailable: $($_.Exception.Message)" }
 			if ($attempt -ge $MaxRetries -or ($statusCode -and $statusCode -ge 400 -and $statusCode -lt 500 -and $statusCode -notin 408, 429)) { throw }
 			Start-Sleep -Seconds ([math]::Min(16, [math]::Pow(2, $attempt)))
 		}

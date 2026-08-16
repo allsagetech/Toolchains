@@ -5,7 +5,9 @@ Copyright (c) 2026 AllSageTech
 SPDX-License-Identifier: MPL-2.0
 #>
 
+. "$PSScriptRoot\semantic-version.ps1"
 . "$PSScriptRoot\util.ps1"
+. "$PSScriptRoot\package-runtime.ps1"
 . "$PSScriptRoot\package-families.ps1"
 . "$PSScriptRoot\upstream-metadata.ps1"
 . "$PSScriptRoot\model-catalog.ps1"
@@ -56,18 +58,20 @@ function Test-TlcRunsOnUbuntu {
 }
 
 function Get-TlcPackageRunsOn {
-	if ($TlcPackageConfig.RunsOn) {
-		return $TlcPackageConfig.RunsOn
+	param([Parameter(Mandatory=$true)][Collections.IDictionary]$Config)
+	if ($Config.RunsOn) {
+		return $Config.RunsOn
 	}
 	return Get-TlcDefaultWindowsRunner
 }
 
 function Get-TlcPackagePublishRunsOn {
-	if ($TlcPackageConfig.PublishRunsOn) {
-		return $TlcPackageConfig.PublishRunsOn
+	param([Parameter(Mandatory=$true)][Collections.IDictionary]$Config)
+	if ($Config.PublishRunsOn) {
+		return $Config.PublishRunsOn
 	}
 
-	$runsOn = Get-TlcPackageRunsOn
+	$runsOn = Get-TlcPackageRunsOn -Config $Config
 	if (Test-TlcRunsOnUbuntu -RunsOn $runsOn) {
 		return $runsOn
 	}
@@ -79,17 +83,19 @@ function Clear-TlcPackageScript {
 	Remove-Item Function:\Test-TlcPackageInstall -Force -ErrorAction SilentlyContinue
 	Remove-Item Function:\Invoke-CustomDockerBuild -Force -ErrorAction SilentlyContinue
 	Remove-Item Function:\Invoke-HuggingFaceSnapshotDownload -Force -ErrorAction SilentlyContinue
-	Clear-Variable 'TlcPackageConfig' -Force -ErrorAction SilentlyContinue
+	Remove-Variable 'TlcPackageConfig' -Scope Global -Force -ErrorAction SilentlyContinue
 }
 
 function Get-TlcPackagePublicationState {
-	$verifiedDownloads = if ($TlcPackageConfig.ContainsKey('VerifiedDownloads')) { [bool]$TlcPackageConfig.VerifiedDownloads } else { $true }
-	$descriptorEligible = if ($TlcPackageConfig.ContainsKey('PublishEligible')) { [bool]$TlcPackageConfig.PublishEligible } else { $true }
+	param([Parameter(Mandatory=$true)][AllowNull()][Collections.IDictionary]$Config)
+	if (-not $Config) { throw 'Package configuration is not loaded.' }
+	$verifiedDownloads = if ($Config.Contains('VerifiedDownloads')) { [bool]$Config.VerifiedDownloads } else { $true }
+	$descriptorEligible = if ($Config.Contains('PublishEligible')) { [bool]$Config.PublishEligible } else { $true }
 	$publishEligible = $verifiedDownloads -and $descriptorEligible
 	$reason = if (-not $verifiedDownloads) {
-		[string]$TlcPackageConfig.UnverifiedDownloadReason
+		[string]$Config.UnverifiedDownloadReason
 	} elseif (-not $descriptorEligible) {
-		[string]$TlcPackageConfig.PublicationBlockReason
+		[string]$Config.PublicationBlockReason
 	} else {
 		''
 	}
@@ -163,7 +169,14 @@ function Invoke-TlcPackageScan {
 	Get-MpThreatDetection
 }
 
-function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string]$dockerfileName) {
+function Invoke-DockerBuild {
+	param(
+		[Parameter(Mandatory=$true)][string]$Tag,
+		[Parameter(Mandatory=$true)][string]$PkgName,
+		[Parameter(Mandatory=$true)][string]$PkgVersion,
+		[string]$DockerfileName,
+		[Parameter(Mandatory=$true)][Collections.IDictionary]$Config
+	)
 	$pkgRoot = Get-TlcPkgRoot
 	if (-not (Test-Path $pkgRoot)) { throw "Package root does not exist: $pkgRoot" }
 
@@ -172,8 +185,8 @@ function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string
 	$defHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $defPath).Hash.ToLowerInvariant()
 	$labels = @(
 		"io.allsagetech.toolchain.specVersion=1",
-		"io.allsagetech.toolchain.packageName=$pkgName",
-		"io.allsagetech.toolchain.packageVersion=$pkgVersion",
+		"io.allsagetech.toolchain.packageName=$PkgName",
+		"io.allsagetech.toolchain.packageVersion=$PkgVersion",
 		"io.allsagetech.toolchain.tlcPath=/.tlc",
 		"io.allsagetech.toolchain.tlcSha256=$defHash",
 		"toolchain.tlcPath=/.tlc",
@@ -182,42 +195,41 @@ function Invoke-DockerBuild($tag, [string]$pkgName, [string]$pkgVersion, [string
 
 	if (Get-Command 'Invoke-CustomDockerBuild' -ErrorAction SilentlyContinue) {
 		Write-Host 'Using custom docker build'
-		if (-not $global:TlcPackageConfig) { $global:TlcPackageConfig = @{} }
-		if ($pkgName) { $global:TlcPackageConfig.Name = $pkgName }
-		if ($pkgVersion) { $global:TlcPackageConfig.Version = $pkgVersion }
+		$Config.Name = $PkgName
+		$Config.Version = $PkgVersion
 		$global:LASTEXITCODE = 0
-		Invoke-CustomDockerBuild $tag $labels
-		if ($LASTEXITCODE -ne 0) { throw "custom docker build failed with exit code $LASTEXITCODE for $tag" }
-		Assert-TlcBuiltImageContract -Tag $tag -ExpectedLabels $labels
+		Invoke-CustomDockerBuild $Tag $labels
+		if ($LASTEXITCODE -ne 0) { throw "custom docker build failed with exit code $LASTEXITCODE for $Tag" }
+		Assert-TlcBuiltImageContract -Tag $Tag -ExpectedLabels $labels
 		return
 	}
 
 	$repoRoot = Split-Path -Parent $PSScriptRoot
-	if (-not $dockerfileName) {
-		$dockerfileName = if (Test-TlcHostIsWindows) { 'Dockerfile' } else { 'Dockerfile.linux' }
+	if (-not $DockerfileName) {
+		$DockerfileName = if (Test-TlcHostIsWindows) { 'Dockerfile' } else { 'Dockerfile.linux' }
 	}
-	$dockerfileSrc = Join-Path $repoRoot $dockerfileName
+	$dockerfileSrc = Join-Path $repoRoot $DockerfileName
 	if (-not (Test-Path -LiteralPath $dockerfileSrc -PathType Leaf)) {
-		if ($dockerfileName -ne 'Dockerfile') {
+		if ($DockerfileName -ne 'Dockerfile') {
 			$dockerfileSrc = Join-Path $repoRoot 'Dockerfile'
 		}
 		if (-not (Test-Path -LiteralPath $dockerfileSrc -PathType Leaf)) {
-			throw "Dockerfile not found for package build: $dockerfileName"
+			throw "Dockerfile not found for package build: $DockerfileName"
 		}
 	}
 	$dockerfileDst = Join-Path $pkgRoot 'Dockerfile'
 	Copy-Item -Path $dockerfileSrc -Destination $dockerfileDst -Force
 	Set-TlcPackageDockerignore -PkgRoot $pkgRoot
 
-	$args = @('build', '-f', $dockerfileDst, '-t', $tag)
-	foreach ($l in $labels) { $args += @('--label', $l) }
-	$args += @($pkgRoot)
+	$dockerArguments = @('build', '-f', $dockerfileDst, '-t', $Tag)
+	foreach ($l in $labels) { $dockerArguments += @('--label', $l) }
+	$dockerArguments += @($pkgRoot)
 
-	& docker @args
+	& docker @dockerArguments
 	if ($LASTEXITCODE -ne 0) {
-		throw "docker build failed with exit code $LASTEXITCODE for $tag"
+		throw "docker build failed with exit code $LASTEXITCODE for $Tag"
 	}
-	Assert-TlcBuiltImageContract -Tag $tag -ExpectedLabels $labels
+	Assert-TlcBuiltImageContract -Tag $Tag -ExpectedLabels $labels
 }
 
 function Assert-TlcBuiltImageContract {
@@ -265,15 +277,15 @@ function Get-TlcDockerRepo {
 }
 
 function Test-DockerTagExists($tag) {
-	$prev = $global:PSNativeCommandUseErrorActionPreference
-	$global:PSNativeCommandUseErrorActionPreference = $false
+	$prev = $PSNativeCommandUseErrorActionPreference
+	$PSNativeCommandUseErrorActionPreference = $false
 	try {
 		& docker manifest inspect $tag *> $null 2>$null
 		return ($LASTEXITCODE -eq 0)
 	} catch {
 		return $false
 	} finally {
-		$global:PSNativeCommandUseErrorActionPreference = $prev
+		$PSNativeCommandUseErrorActionPreference = $prev
 	}
 }
 
@@ -295,26 +307,31 @@ function Invoke-CosignSignImage([string]$tag) {
 	if (-not $digRef) {
 		throw "cosign signing was requested but no immutable RepoDigest could be determined for $tag"
 	}
-	$args = @('sign', '--yes')
+	$cosignArguments = @('sign', '--yes')
 	$key = if ($env:TLC_COSIGN_KEY) { $env:TLC_COSIGN_KEY } elseif ($env:COSIGN_KEY) { $env:COSIGN_KEY } else { $null }
-	if ($key) { $args += @('--key', $key) }
-	$args += @($digRef)
+	if ($key) { $cosignArguments += @('--key', $key) }
+	$cosignArguments += @($digRef)
 
-	& $cosign.Source @args
+	& $cosign.Source @cosignArguments
 	if ($LASTEXITCODE -ne 0) {
 		throw "cosign sign failed (exit code $LASTEXITCODE) for $digRef"
 	}
 	Write-Host "Signed: $digRef"
 }
 
-function Invoke-DockerPush([string]$name, [string]$version) {
+function Invoke-DockerPush {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[Parameter(Mandatory=$true)][string]$Version,
+		[Parameter(Mandatory=$true)][Collections.IDictionary]$Config
+	)
 	$ErrorActionPreference = 'Stop'
 
 	$repo = Get-TlcDockerRepo
 	if (-not $repo) { throw "TLC_DOCKER_REPO is empty. Set it (e.g. allsagetech/toolchains) or set secrets.DOCKER_REPO in CI." }
 
-	$safeVer = $version.Replace('+','_')
-	$tag = "${repo}:$name-$safeVer"
+	$safeVer = $Version.Replace('+','_')
+	$tag = "${repo}:$Name-$safeVer"
 
 	Assert-DockerDaemonAvailable
 
@@ -327,10 +344,10 @@ function Invoke-DockerPush([string]$name, [string]$version) {
 	}
 
 	$dockerfileName = $null
-	if ($global:TlcPackageConfig -and $global:TlcPackageConfig.ContainsKey('Dockerfile')) {
-		$dockerfileName = [string]$global:TlcPackageConfig.Dockerfile
+	if ($Config.Contains('Dockerfile')) {
+		$dockerfileName = [string]$Config.Dockerfile
 	}
-	Invoke-DockerBuild $tag $name $version $dockerfileName
+	Invoke-DockerBuild -Tag $tag -PkgName $Name -PkgVersion $Version -DockerfileName $dockerfileName -Config $Config
 
 	$imageBytesText = (& docker image inspect $tag --format '{{.Size}}' 2>$null | Out-String).Trim()
 	[long]$imageBytes = 0
@@ -352,15 +369,15 @@ function Assert-DockerDaemonAvailable {
 		throw 'docker CLI not found on PATH; cannot build or push toolchain container images.'
 	}
 
-	$prev = $global:PSNativeCommandUseErrorActionPreference
-	$global:PSNativeCommandUseErrorActionPreference = $false
+	$prev = $PSNativeCommandUseErrorActionPreference
+	$PSNativeCommandUseErrorActionPreference = $false
 	try {
 		& docker version --format '{{.Server.Version}}' *> $null
 		if ($LASTEXITCODE -ne 0) {
 			throw "Docker daemon is not available to this runner. Package publishing requires a runner with a working Docker service."
 		}
 	} finally {
-		$global:PSNativeCommandUseErrorActionPreference = $prev
+		$PSNativeCommandUseErrorActionPreference = $prev
 	}
 }
 
@@ -385,28 +402,7 @@ function Invoke-TlcInit {
 }
 
 function Invoke-TlcScript($pkg) {
-	$ProgressPreference = 'SilentlyContinue'
-	$global:LASTEXITCODE = 0
-	& $pkg
-	$global:LASTEXITCODE = 0
-	Invoke-TlcInit
-	$global:LASTEXITCODE = 0
-	Install-TlcPackage
-	if ($LASTEXITCODE -ne 0) {
-		throw "install package completed with exit code $LASTEXITCODE"
-	}
-	Write-Output "toolchains: $($TlcPackageConfig.Name) v$($TlcPackageConfig.Version) is $(if ($TlcPackageConfig.UpToDate) { 'UP-TO-DATE' } else { 'OUT-OF-DATE' })"
-	if (-not $TlcPackageConfig.UpToDate) {
-		$global:LASTEXITCODE = 0
-		Test-TlcPackageInstall
-		if ($LASTEXITCODE -ne 0) {
-			throw "test package completed with exit code $LASTEXITCODE"
-		}
-		# Uncomment to print compressed package size
-		# tar.exe -czf 'pkg.tar.gz' '\pkg'
-		# Write-Host "package size $('{0:N0}' -f [math]::Floor((Get-Item 'pkg.tar.gz').Length / 1KB))KB"
-		# Remove-Item 'pkg.tar.gz' -ErrorAction SilentlyContinue
-	}
+	return (Invoke-TlcPackageLifecycle -Path $pkg)
 }
 
 function Get-TlcPushPackagePaths {
@@ -431,8 +427,14 @@ function Get-TlcPushPackagePaths {
 	)
 	$sharedFiles = @(
 		'src/main.ps1',
+		'src/definition-file.ps1',
+		'src/huggingface-download.ps1',
+		'src/huggingface-image.ps1',
+		'src/integrity.ps1',
 		'src/model-catalog.ps1',
 		'src/network.ps1',
+		'src/package-runtime.ps1',
+		'src/semantic-version.ps1',
 		'src/upstream-metadata.ps1',
 		'src/util.ps1',
 		'.github/workflows/build-push.yml'
@@ -484,16 +486,16 @@ function Save-WorkflowMatrix {
 		Sort-Object -Property FullName
 	$repoRoot = (Get-Location).Path
 	$refName = if ([string]::IsNullOrWhiteSpace($env:GITHUB_REF_NAME)) { $null } else { ($env:GITHUB_REF_NAME -replace '^.*/') }
-	foreach ($script in $scripts) {
+	$descriptors = @(Read-TlcPackageDescriptors -Path @($scripts.FullName))
+	foreach ($descriptor in $descriptors) {
+		$script = Get-Item -LiteralPath $descriptor.Path
 		Write-Output "toolchains: analyzing $($script.Name)"
-		Clear-TlcPackageScript
-		& $script.FullName
-		Test-TlcPackageScript
+		$config = $descriptor.Config
 		$scriptPath = $script.FullName.Replace($repoRoot, '.')
-		$runsOn = Get-TlcPackageRunsOn
-		$publishRunsOn = Get-TlcPackagePublishRunsOn
-		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-		$publicationState = Get-TlcPackagePublicationState
+		$runsOn = Get-TlcPackageRunsOn -Config $config
+		$publishRunsOn = Get-TlcPackagePublishRunsOn -Config $config
+		$tier = if ($config.Tier) { [string]$config.Tier } else { 'tooling' }
+		$publicationState = Get-TlcPackagePublicationState -Config $config
 		$entry = @{
 			package            = $scriptPath
 			runs_on            = $runsOn
@@ -502,7 +504,7 @@ function Save-WorkflowMatrix {
 			verified_downloads  = $publicationState.VerifiedDownloads
 			publish_eligible    = $publicationState.PublishEligible
 			quarantine_reason   = $publicationState.QuarantineReason
-			unverified_download_reason = if ($publicationState.VerifiedDownloads) { '' } else { [string]$TlcPackageConfig.UnverifiedDownloadReason }
+			unverified_download_reason = if ($publicationState.VerifiedDownloads) { '' } else { [string]$config.UnverifiedDownloadReason }
 			pkg_root           = Get-TlcPkgRootForRunner -RunsOn $runsOn
 			cache_path         = Get-TlcCachePathForRunner -RunsOn $runsOn
 			publish_pkg_root   = Get-TlcPkgRootForRunner -RunsOn $publishRunsOn
@@ -515,10 +517,9 @@ function Save-WorkflowMatrix {
 		if ($matchesRef) {
 			$pkgs = ,$entry
 			break
-		} elseif ((-not $TlcPackageConfig.Nonce) -or ("$($TlcPackageConfig.Name)-$($TlcPackageConfig.Version)" -notin $tagList.tags)) {
+		} elseif ((-not $config.Nonce) -or ("$($config.Name)-$($config.Version)" -notin $tagList.tags)) {
 			$pkgs += ,$entry
 		}
 	}
-	Clear-TlcPackageScript
 	[IO.File]::WriteAllText('.matrix', (ConvertTo-Json @{ include = $pkgs } -Depth 50 -Compress))
 }

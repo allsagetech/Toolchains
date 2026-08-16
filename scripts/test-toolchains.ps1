@@ -21,7 +21,10 @@ function Assert-True {
 }
 
 function Test-PowerShellSyntax {
-	$files = Get-ChildItem -Path $repoRoot -Filter '*.ps1' -Recurse -File | Sort-Object FullName
+	$modulePrefix = (Join-Path $repoRoot 'ps_modules') + [IO.Path]::DirectorySeparatorChar
+	$files = Get-ChildItem -Path $repoRoot -Recurse -File |
+		Where-Object { $_.Extension -eq '.ps1' -and -not $_.FullName.StartsWith($modulePrefix, [StringComparison]::OrdinalIgnoreCase) } |
+		Sort-Object FullName
 	foreach ($file in $files) {
 		$tokens = $null
 		$errors = $null
@@ -72,21 +75,23 @@ function Test-PackageScripts {
 	$packages = Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Sort-Object FullName
 	Assert-True ($packages.Count -gt 0) 'No package scripts found under src/pkgs.'
 
-	foreach ($package in $packages) {
-		Clear-TlcPackageScript
-		& $package.FullName
-		Test-TlcPackageScript
-
-		$tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
+	$descriptors = @(Read-TlcPackageDescriptors -Path @($packages.FullName))
+	foreach ($descriptor in $descriptors) {
+		$package = Get-Item -LiteralPath $descriptor.Path
+		$config = $descriptor.Config
+		$tier = if ($config.Tier) { [string]$config.Tier } else { 'tooling' }
 		Assert-True ($tier -in $allowedTiers) "Package $($package.FullName) has unsupported tier: $tier"
 
-		$runsOn = Get-TlcPackageRunsOn
+		$runsOn = Get-TlcPackageRunsOn -Config $config
 		if ($tier -like 'model-*') {
-			Assert-True (Test-TlcRunsOnUbuntu -RunsOn $runsOn) "Model package $($TlcPackageConfig.Name) must run on an Ubuntu runner."
+			Assert-True (Test-TlcRunsOnUbuntu -RunsOn $runsOn) "Model package $($config.Name) must run on an Ubuntu runner."
 		}
 	}
 
-	Clear-TlcPackageScript
+	$descriptor = Read-TlcPackageDescriptor -Path $packages[0].FullName
+	Assert-True (-not [string]::IsNullOrWhiteSpace([string]$descriptor.Config.Name)) 'Isolated descriptor reader omitted package configuration.'
+	Assert-True ($null -eq (Get-Variable -Name TlcPackageConfig -Scope Global -ErrorAction SilentlyContinue)) 'Isolated descriptor reader leaked global package configuration.'
+	Assert-True ($null -eq (Get-Command Install-TlcPackage -ErrorAction SilentlyContinue)) 'Isolated descriptor reader leaked package functions.'
 	Write-Host "Validated $($packages.Count) package scripts."
 }
 
@@ -94,18 +99,13 @@ function Test-ModelCategoryMarkers {
 	. .\src\main.ps1
 
 	$configs = @()
-	try {
-		foreach ($package in Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Sort-Object FullName) {
-			Clear-TlcPackageScript
-			& $package.FullName
-			Test-TlcPackageScript
-			$configs += ,[pscustomobject]@{
-				Name = [string]$TlcPackageConfig.Name
-				Tier = if ($TlcPackageConfig.Tier) { [string]$TlcPackageConfig.Tier } else { 'tooling' }
-			}
+	$packagePaths = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Sort-Object FullName | ForEach-Object FullName)
+	foreach ($descriptor in Read-TlcPackageDescriptors -Path $packagePaths) {
+		$config = $descriptor.Config
+		$configs += ,[pscustomobject]@{
+			Name = [string]$config.Name
+			Tier = if ($config.Tier) { [string]$config.Tier } else { 'tooling' }
 		}
-	} finally {
-		Clear-TlcPackageScript
 	}
 
 	$modelPackages = @(Get-TlcModelCategoryPackages -PackageConfigs $configs)
@@ -300,11 +300,9 @@ function Test-WorkflowRunnerDefaults {
 	Assert-True ((Get-TlcPkgRootForRunner -RunsOn 'ubuntu-latest') -eq '/mnt/toolchains-pkg') 'Ubuntu package root should use the mounted package directory.'
 	Assert-True ((Get-TlcCachePathForRunner -RunsOn 'ubuntu-latest') -eq '/mnt/toolchains-pkg/cache') 'Ubuntu cache path should use the mounted cache directory.'
 
-	Clear-TlcPackageScript
-	$global:TlcPackageConfig = @{ Name = 'test-package' }
-	Assert-True ((Get-TlcPackageRunsOn) -eq 'windows-2022') 'Package install/test default runner should be windows-2022.'
-	Assert-True ((Get-TlcPackagePublishRunsOn) -eq 'windows-2022') 'Package publish default runner should be windows-2022.'
-	Clear-TlcPackageScript
+	$config = @{ Name = 'test-package' }
+	Assert-True ((Get-TlcPackageRunsOn -Config $config) -eq 'windows-2022') 'Package install/test default runner should be windows-2022.'
+	Assert-True ((Get-TlcPackagePublishRunsOn -Config $config) -eq 'windows-2022') 'Package publish default runner should be windows-2022.'
 
 	Write-Host 'Validated workflow runner defaults.'
 }
@@ -314,6 +312,7 @@ function Test-ProductionReadinessPolicies {
 
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
+	$runtimeText = Get-Content -LiteralPath .\src\package-runtime.ps1 -Raw
 	$workflowRef = [regex]::Match($workflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
 	Assert-True $workflowRef.Success 'Package workflow does not pin Toolchain to an immutable commit.'
 	Assert-True ($installerText -match [regex]::Escape($workflowRef.Groups[1].Value)) 'Toolchain installer default does not match the workflow immutable commit.'
@@ -357,17 +356,14 @@ function Test-ProductionReadinessPolicies {
 		$verifiedText = Get-Content -LiteralPath $verifiedScript -Raw
 		Assert-True ($verifiedText -match 'ExpectedSha256') "$verifiedScript does not pass its publisher SHA-256 to the common downloader."
 	}
-	Clear-TlcPackageScript
 	foreach ($quarantinedScript in @('.\src\pkgs\docker.ps1', '.\src\pkgs\nasm.ps1', '.\src\pkgs\zstd.ps1')) {
-		Clear-TlcPackageScript
-		. $quarantinedScript
-		Assert-True (-not [bool]$TlcPackageConfig.VerifiedDownloads) "$quarantinedScript is not quarantined despite missing publisher provenance metadata."
-		Assert-True (-not [string]::IsNullOrWhiteSpace([string]$TlcPackageConfig.UnverifiedDownloadReason)) "$quarantinedScript quarantine does not explain the provenance gap."
+		$config = (Read-TlcPackageDescriptor -Path $quarantinedScript).Config
+		Assert-True (-not [bool]$config.VerifiedDownloads) "$quarantinedScript is not quarantined despite missing publisher provenance metadata."
+		Assert-True (-not [string]::IsNullOrWhiteSpace([string]$config.UnverifiedDownloadReason)) "$quarantinedScript quarantine does not explain the provenance gap."
 	}
 	foreach ($nodeMajor in @(22, 24)) {
-		Clear-TlcPackageScript
-		. ".\src\pkgs\node\node$nodeMajor.ps1"
-		$nodePublication = Get-TlcPackagePublicationState
+		$config = (Read-TlcPackageDescriptor -Path ".\src\pkgs\node\node$nodeMajor.ps1").Config
+		$nodePublication = Get-TlcPackagePublicationState -Config $config
 		Assert-True $nodePublication.VerifiedDownloads "Node $nodeMajor security quarantine incorrectly marks its verified upstream archive unverified."
 		Assert-True (-not $nodePublication.PublishEligible) "Node $nodeMajor can publish despite active HIGH/CRITICAL findings in its upstream npm bundle."
 		Assert-True (-not [string]::IsNullOrWhiteSpace($nodePublication.QuarantineReason)) "Node $nodeMajor security quarantine has no explanation."
@@ -389,10 +385,13 @@ function Test-ProductionReadinessPolicies {
 		}
 	}
 	$utilText = Get-Content -LiteralPath .\src\util.ps1 -Raw
-	Assert-True ($utilText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
+	$integrityText = Get-Content -LiteralPath .\src\integrity.ps1 -Raw
+	$huggingFaceImageText = Get-Content -LiteralPath .\src\huggingface-image.ps1 -Raw
+	$localExecText = Get-Content -LiteralPath .\src\local-exec.ps1 -Raw
+	Assert-True ($integrityText -match '\$assetName\.sha256\.txt') 'GitHub release verification does not discover publisher companion SHA-256 assets.'
 	Assert-True ($utilText -match '/releases/latest') 'GitHub release discovery does not prefer the bounded latest-release endpoint.'
 	Assert-True ($utilText -match 'releases\?per_page=20') 'GitHub release fallback still requests oversized release-history pages.'
-	Assert-True ($utilText -match "OSPlatform\]::Windows\)\) \{ 'Path' \} else \{ 'PATH' \}") 'Local execution does not normalize PATH casing for Linux hosts.'
+	Assert-True ($localExecText -match "OSPlatform\]::Windows\)\) \{ 'Path' \} else \{ 'PATH' \}") 'Local execution does not normalize PATH casing for Linux hosts.'
 	$releaseSelection = Select-TlcGitHubReleaseAsset -Releases @(
 		[pscustomobject]@{ tag_name = 'v2.0.0'; prerelease = $false; assets = @() },
 		[pscustomobject]@{ tag_name = 'v1.9.0'; prerelease = $false; assets = @([pscustomobject]@{ name = 'tool-win-x64.zip'; browser_download_url = 'https://example.invalid/tool.zip' }) }
@@ -414,7 +413,7 @@ function Test-ProductionReadinessPolicies {
 	}
 	Assert-True (@(Get-TlcPushPackagePaths -ChangedPath @('README.md', 'CHANGELOG.md')).Count -eq 0) 'Documentation-only pushes still select publication jobs.'
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
-	Assert-True ($workflowText -match '\$TlcPackageConfig\.Tags\s*=\s*@\(\)') 'Forced PR smoke builds do not clear published package tags.'
+	Assert-True ($runtimeText -match '\$global:TlcPackageConfig\.Tags\s*=\s*@\(\)') 'Forced PR smoke builds do not clear published package tags in the isolated runtime.'
 	Assert-True ($workflowText -match 'Where-Object \{ \[bool\]\$_\.verified_downloads -and \[bool\]\$_\.publish_eligible \}') 'Workflow matrices do not exclude unverified or quarantined packages.'
 	Assert-True ($workflowText -match 'Get-TlcPushPackagePaths -ChangedPath \$changed') 'Push workflows do not route the changed file set into the bounded package selector.'
 	Assert-True ($workflowText -match 'git diff --name-only \$before \$after') 'Push workflows do not compare the exact before/after commit trees.'
@@ -445,6 +444,11 @@ function Test-ProductionReadinessPolicies {
 	$linuxDockerfileText = Get-Content -LiteralPath .\Dockerfile.linux -Raw
 	Assert-True ($linuxDockerfileText -match '(?m)^FROM scratch\s*$') 'Ordinary Linux package images still inherit an unrelated operating-system filesystem.'
 	Assert-True ($linuxDockerfileText -notmatch '(?m)^FROM (?:ubuntu|debian|alpine|mcr\.)') 'Ordinary Linux package images still inherit a vulnerable runtime base.'
+	$windowsDockerfileText = Get-Content -LiteralPath .\Dockerfile -Raw
+	Assert-True ($windowsDockerfileText -match '(?m)^FROM mcr\.microsoft\.com/windows/nanoserver:ltsc2022@sha256:[0-9a-f]{64}\s*$') 'Windows package images do not pin the Nano Server base by digest.'
+	Assert-True ($huggingFaceImageText -match "FROM ubuntu:22\.04@sha256:[0-9a-f]{64}") 'Generated layered Linux images do not pin Ubuntu by digest.'
+	$openAiModelText = Get-Content -LiteralPath .\src\pkgs\openai-gpt-oss-20b.ps1 -Raw
+	Assert-True ($openAiModelText -match "FROM ubuntu:22\.04@sha256:[0-9a-f]{64}") 'The custom OpenAI model image does not pin Ubuntu by digest.'
 	$localContractText = Get-Content -LiteralPath .\.github\scripts\Test-LocalImageContract.ps1 -Raw
 	Assert-True ($localContractText -match 'docker create \$ImageRef ''toolchain-contract-placeholder''') 'Exact-image contract testing cannot inspect artifact-only scratch images.'
 	Assert-True ($workflowText -match 'package-health-summary:') 'Publication does not produce a consolidated package-health artifact.'
@@ -827,16 +831,51 @@ function Test-PlatformIndexMigrationPlan {
 	Write-Host 'Validated first-run multi-platform index migration.'
 }
 
-Test-PowerShellSyntax
-Test-WebRequestUserAgent
-Test-PackageScripts
-Test-ModelCategoryMarkers
-& .\scripts\test-package-spec.ps1
-Test-HuggingFaceHelpers
-Test-HuggingFaceLayeredDockerfile
-Test-UpstreamMetadataParsers
-Test-PlatformIndexMigrationPlan
-Test-WorkflowRunnerDefaults
-Test-ProductionReadinessPolicies
-Test-AtomicVerifiedDownloads
-Test-PackageLifecycleStateTransitions
+function Test-SemanticVersionValidation {
+	. .\src\main.ps1
+	([TlcSemanticVersion]::new()).ToString() | ForEach-Object { Assert-True ($_ -eq '0.0.0') 'Empty semantic-version sentinel changed.' }
+	Assert-True (([TlcSemanticVersion]::new('1.2.3+4')).ToString() -eq '1.2.3+4') 'Valid semantic version was parsed incorrectly.'
+	Assert-True ([TlcSemanticVersion]::new('2.0.0').LaterThan([TlcSemanticVersion]::new('1.9.9'))) 'Semantic version ordering is incorrect.'
+	$invalidRejected = $false
+	try { $null = [TlcSemanticVersion]::new('not-a-version') } catch { $invalidRejected = $true }
+	Assert-True $invalidRejected 'Invalid semantic versions fail open as 0.0.0.'
+	$patternMismatchRejected = $false
+	try { $null = [TlcSemanticVersion]::new('release-x', '^v([0-9]+)\.([0-9]+)\.([0-9]+)$') } catch { $patternMismatchRejected = $true }
+	Assert-True $patternMismatchRejected 'Custom semantic-version pattern mismatches fail open.'
+	Write-Host 'Validated fail-closed semantic version parsing.'
+}
+
+function Test-PackageInventory {
+	$tempPath = Join-Path ([IO.Path]::GetTempPath()) ("toolchains-inventory-$([Guid]::NewGuid().ToString('n')).md")
+	try {
+		& .\scripts\export-package-inventory.ps1 -OutputPath $tempPath | Out-Null
+		$expected = Get-Content -LiteralPath .\PACKAGE_INVENTORY.md -Raw
+		$actual = Get-Content -LiteralPath $tempPath -Raw
+		Assert-True ($actual -ceq $expected) 'PACKAGE_INVENTORY.md is stale; run ./scripts/export-package-inventory.ps1.'
+	} finally {
+		Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+	}
+	Write-Host 'Validated generated package inventory.'
+}
+
+function Invoke-ToolchainsValidation {
+	Test-PowerShellSyntax
+	Test-WebRequestUserAgent
+	Test-PackageScripts
+	Test-ModelCategoryMarkers
+	& .\scripts\test-package-spec.ps1
+	Test-HuggingFaceHelpers
+	Test-HuggingFaceLayeredDockerfile
+	Test-UpstreamMetadataParsers
+	Test-PlatformIndexMigrationPlan
+	Test-WorkflowRunnerDefaults
+	Test-ProductionReadinessPolicies
+	Test-AtomicVerifiedDownloads
+	Test-PackageLifecycleStateTransitions
+	Test-SemanticVersionValidation
+	Test-PackageInventory
+}
+
+if ($MyInvocation.InvocationName -ne '.') {
+	Invoke-ToolchainsValidation
+}

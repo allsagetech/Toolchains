@@ -178,9 +178,9 @@ function global:Invoke-CustomDockerBuild($tag, [string[]]$labels) {
 	$dockerfile = Join-Path $pkgRoot 'Dockerfile.vs-buildtools'
 	Copy-Item Dockerfile -Destination $dockerfile
 	Set-TlcPackageDockerignore -PkgRoot $pkgRoot
-	$args = @('build', '-f', $dockerfile, '-t', $tag)
-	foreach ($label in $labels) { $args += @('--label', $label) }
-	$args += $pkgRoot
-	& docker @args
+	$dockerArguments = @('build', '-f', $dockerfile, '-t', $tag)
+	foreach ($label in $labels) { $dockerArguments += @('--label', $label) }
+	$dockerArguments += $pkgRoot
+	& docker @dockerArguments
 	if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE for $tag" }
 }
