@@ -538,6 +538,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($gitLinuxPackageText -match 'BuildRevision = 1' -and $gitLinuxPackageText -match '\$version = "\$upstreamVersion\+\$\(\$TlcPackageConfig\.BuildRevision\)"') 'Git Linux does not carry a republishable scratch-image revision.'
 	$mavenPackageText = Get-Content -LiteralPath .\src\pkgs\maven.ps1 -Raw
 	Assert-True ($mavenPackageText -match 'BuildRevision = 1' -and $mavenPackageText -match "password\|passphrase" -and $mavenPackageText -match 'credential value intentionally omitted') 'Maven does not remove upstream example credential elements in a republishable revision.'
+	$conanPackageText = Get-Content -LiteralPath .\src\pkgs\conan.ps1 -Raw
+	Assert-True ($conanPackageText -match 'BuildRevision = 1' -and $conanPackageText -match 'setuptools-\*\.dist-info' -and $conanPackageText -match 'Remove-Item -LiteralPath \$metadataDirectory\.FullName') 'Conan does not remove stale non-runtime setuptools metadata in a republishable revision.'
 	$windowsDockerfileText = Get-Content -LiteralPath .\Dockerfile -Raw
 	Assert-True ($windowsDockerfileText -match '(?m)^FROM mcr\.microsoft\.com/windows/nanoserver:ltsc2022@sha256:[0-9a-f]{64}\s*$') 'Windows package images do not pin the Nano Server base by digest.'
 	Assert-True ($huggingFaceImageText -match "FROM scratch" -and $huggingFaceImageText -notmatch "FROM ubuntu:") 'Generated model artifacts still inherit an unrelated operating-system filesystem.'

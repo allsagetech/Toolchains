@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'conan'
+	BuildRevision = 1
 }
 
 function global:Install-TlcPackage {
@@ -17,8 +18,9 @@ function global:Install-TlcPackage {
 		TagPattern = '^([0-9]+)\.([0-9]+)\.([0-9]+)$'
 	}
 	$Asset = Get-GitHubRelease @Params
-	$TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
-	$TlcPackageConfig.Version = $Asset.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$($Asset.Version)+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $packageVersion.ToString()
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
@@ -27,6 +29,13 @@ function global:Install-TlcPackage {
 		AssetURL = $Asset.URL
 	}
 	Install-BuildTool @Params
+	$staleSetuptoolsMetadata = @(Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Directory -Filter 'setuptools-*.dist-info')
+	foreach ($metadataDirectory in $staleSetuptoolsMetadata) {
+		Remove-Item -LiteralPath $metadataDirectory.FullName -Recurse -Force
+	}
+	if (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Directory -Filter 'setuptools-*.dist-info' | Select-Object -First 1) {
+		throw 'Stale setuptools distribution metadata remained in the Conan package.'
+	}
 	Write-TlcVars @{
 		env = @{
 			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'conan.exe' | Select-Object -First 1).DirectoryName
