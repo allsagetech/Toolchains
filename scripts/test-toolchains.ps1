@@ -351,7 +351,10 @@ function Test-ProductionReadinessPolicies {
 	foreach ($evidence in @("cosign @Arguments", "'spdxjson'", "'slsaprovenance'", 'imagetools create', 'AliasTag must be')) {
 		Assert-True ($rollbackScriptText -match [regex]::Escape($evidence)) "Package rollback is missing evidence gate: $evidence"
 	}
-	Assert-True ($rescanPlanText -match 'Sort-Object Version -Descending') 'Scheduled rescans do not select the newest durable package version.'
+	foreach ($component in @('Version\.Major','Version\.Minor','Version\.Patch','Version\.Build')) {
+		Assert-True ($rescanPlanText -match $component) "Scheduled rescans do not sort the newest durable package by $component."
+	}
+	Assert-True ($rescanPlanText -notmatch 'Sort-Object Version -Descending') 'Scheduled rescans still use the reverse-oriented semantic comparer for tag ordering.'
 	Assert-True ($rescanPlanText -match '\[string\]\$Package' -and $rescanPlanText -match '\$entry\.canonical') 'Published-package rescans cannot safely select a logical package family.'
 	Assert-True ($rescanWorkflowText -match 'scan:[\s\S]+steps:\s+- name: Checkout Toolchains[\s\S]+Scan immutable package tag') 'Published-package rescans cannot load repository VEX statements.'
 	Assert-True ($rescanWorkflowText -match 'CurrentResultsAuthoritative' -and $rescanWorkflowText -match 'inputs:[\s\S]+package:') 'Targeted rescans can replace the signed catalog instead of safely merging into it.'
