@@ -42,8 +42,8 @@ function global:Install-TlcPackage {
 		$env:GOWORK = 'off'
 		$go = Get-TlcApplicationPath -Name 'go'
 		$module = "github.com/k3d-io/k3d/v5@v$($TlcPackageConfig.Version)"
-		$downloadJson = (& $go mod download -json $module | Out-String)
-		if ($LASTEXITCODE -ne 0) { throw "verified k3d source download failed with exit code $LASTEXITCODE" }
+		$downloadJson = Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('mod', 'download', '-json', $module) `
+			-FailureMessage 'verified k3d source download failed' -PassThru
 		$download = $downloadJson | ConvertFrom-Json
 		if (-not $download.Dir -or -not (Test-Path -LiteralPath $download.Dir -PathType Container)) { throw 'verified k3d module source was not available' }
 		Copy-Item -LiteralPath $download.Dir -Destination $sourceRoot -Recurse -Force
@@ -51,11 +51,13 @@ function global:Install-TlcPackage {
 		Push-Location $sourceRoot
 		$locationPushed = $true
 
-		& $go get 'golang.org/x/net@v0.56.0' 'golang.org/x/text@v0.39.0' 'google.golang.org/grpc@v1.82.1'
-		if ($LASTEXITCODE -ne 0) { throw "k3d dependency patch failed with exit code $LASTEXITCODE" }
+		Invoke-TlcNativeCommand -FilePath $go -ArgumentList @(
+			'get', 'golang.org/x/net@v0.56.0', 'golang.org/x/text@v0.39.0', 'google.golang.org/grpc@v1.82.1'
+		) -FailureMessage 'k3d dependency patch failed'
 
-		$dependencies = @(& $go list -deps .)
-		if ($LASTEXITCODE -ne 0) { throw "k3d dependency verification failed with exit code $LASTEXITCODE" }
+		$dependencyText = Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('list', '-deps', '.') `
+			-FailureMessage 'k3d dependency verification failed' -PassThru
+		$dependencies = @($dependencyText -split '\r?\n')
 		$forbidden = @($dependencies | Where-Object { $_ -eq 'github.com/docker/cli/cli-plugins/manager' -or $_ -like 'github.com/docker/docker/daemon*' })
 		if ($forbidden.Count -gt 0) { throw "k3d unexpectedly links VEX-excluded code: $($forbidden -join ', ')" }
 
@@ -63,8 +65,9 @@ function global:Install-TlcPackage {
 		if ($versionSource -notmatch 'var K3sVersion = "([^"]+)"') { throw 'could not determine the k3s version embedded by k3d' }
 		$k3sVersion = $Matches[1]
 		$ldflags = "-s -w -X github.com/k3d-io/k3d/v5/version.Version=v$($TlcPackageConfig.Version) -X github.com/k3d-io/k3d/v5/version.K3sVersion=$k3sVersion"
-		& $go build -trimpath -ldflags $ldflags -o (Get-TlcPkgPath 'k3d.exe') .
-		if ($LASTEXITCODE -ne 0) { throw "verified k3d source build failed with exit code $LASTEXITCODE" }
+		Invoke-TlcNativeCommand -FilePath $go `
+			-ArgumentList @('build', '-trimpath', '-ldflags', $ldflags, '-o', (Get-TlcPkgPath 'k3d.exe'), '.') `
+			-FailureMessage 'verified k3d source build failed'
 	} finally {
 		if ($locationPushed) { Pop-Location }
 		foreach ($name in $previous.Keys) {

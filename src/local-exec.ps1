@@ -12,8 +12,8 @@ function Expand-TlcEnvValue {
 	if ($null -eq $Value) { return $null }
 	$expandOne = {
 		param([string]$Text)
-		$out = $Text.Replace('${.}', $PkgRoot)
-		$out = [regex]::Replace($out, '(?i)(?<![A-Za-z]:)\\pkg', { param($match) $PkgRoot })
+		$out = [regex]::Replace($Text, '(?i)(?<![A-Za-z]:)\\pkg', { param($match) $PkgRoot })
+		$out = $out.Replace('${.}', $PkgRoot)
 		return $out
 	}
 	if ($Value -is [string]) { return (& $expandOne $Value) }

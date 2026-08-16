@@ -66,10 +66,10 @@ function global:Install-TlcPackage {
 		$cliLdflags = "-s -w -X github.com/docker/cli/cli/version.GitCommit=$UpstreamCommit -X github.com/docker/cli/cli/version.BuildTime=$UpstreamCommitDate -X github.com/docker/cli/cli/version.Version=$UpstreamVersion"
 		Push-Location $cliSource.FullName
 		$locationPushed = $true
-		& $go build -buildvcs=false -trimpath -tags grpcnotrace -ldflags $cliLdflags -o $dockerBuild ./cmd/docker
-		if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $dockerBuild -PathType Leaf)) {
-			throw "Docker CLI source build failed with exit code $LASTEXITCODE."
-		}
+		Invoke-TlcNativeCommand -FilePath $go `
+			-ArgumentList @('build', '-buildvcs=false', '-trimpath', '-tags', 'grpcnotrace', '-ldflags', $cliLdflags, '-o', $dockerBuild, './cmd/docker') `
+			-FailureMessage 'Docker CLI source build failed'
+		if (-not (Test-Path -LiteralPath $dockerBuild -PathType Leaf)) { throw 'Docker CLI source build did not produce docker.exe.' }
 		Pop-Location
 		$locationPushed = $false
 
@@ -82,39 +82,46 @@ function global:Install-TlcPackage {
 		$env:GOFLAGS = $null
 		$env:GOBIN = $goToolsRoot
 		if (-not $env:GOPATH) {
-			$env:GOPATH = (& $go env GOPATH | Select-Object -First 1).Trim()
-			if ($LASTEXITCODE -ne 0 -or -not $env:GOPATH) { throw 'Could not resolve GOPATH for the Docker resource build.' }
+			$env:GOPATH = (Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('env', 'GOPATH') `
+				-FailureMessage 'Could not resolve GOPATH for the Docker resource build' -PassThru).Trim()
+			if (-not $env:GOPATH) { throw 'Could not resolve GOPATH for the Docker resource build.' }
 		}
-		& $go install "github.com/tc-hib/go-winres@$GoWinresVersion"
-		if ($LASTEXITCODE -ne 0) { throw "go-winres $GoWinresVersion installation failed with exit code $LASTEXITCODE." }
+		Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('install', "github.com/tc-hib/go-winres@$GoWinresVersion") `
+			-FailureMessage "go-winres $GoWinresVersion installation failed"
 		$goWinres = Join-Path $goToolsRoot 'go-winres.exe'
-		$toolMetadata = (& $go version -m $goWinres | Out-String)
-		if ($LASTEXITCODE -ne 0 -or $toolMetadata -notmatch "(?m)^\s*mod\s+github\.com/tc-hib/go-winres\s+$([regex]::Escape($GoWinresVersion))\s") {
+		$toolMetadata = Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('version', '-m', $goWinres) `
+			-FailureMessage 'Could not inspect go-winres build tool provenance' -PassThru
+		if ($toolMetadata -notmatch "(?m)^\s*mod\s+github\.com/tc-hib/go-winres\s+$([regex]::Escape($GoWinresVersion))\s") {
 			throw "go-winres build tool provenance did not resolve to $GoWinresVersion."
 		}
 		$env:PATH = "$goToolsRoot;$($previous['PATH'])"
 		$env:GOFLAGS = '-mod=vendor'
 		Push-Location $mobySource.FullName
 		$locationPushed = $true
-		& .\hack\make\.go-autogen.ps1 -CommitString $MobyCommit -DockerVersion $UpstreamVersion `
-			-Platform 'Docker Engine - Community' -Product 'Docker Engine - Community' `
-			-DefaultProductLicense 'Community Engine' -PackagerName 'Docker, Inc.'
-		if ($LASTEXITCODE -ne 0) { throw "Moby Windows resource generation failed with exit code $LASTEXITCODE." }
+		$pwsh = Get-TlcApplicationPath -Name 'pwsh'
+		Invoke-TlcNativeCommand -FilePath $pwsh -ArgumentList @(
+			'-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $mobySource.FullName 'hack\make\.go-autogen.ps1'),
+			'-CommitString', $MobyCommit, '-DockerVersion', $UpstreamVersion,
+			'-Platform', 'Docker Engine - Community', '-Product', 'Docker Engine - Community',
+			'-DefaultProductLicense', 'Community Engine', '-PackagerName', 'Docker, Inc.'
+		) -FailureMessage 'Moby Windows resource generation failed'
 		$daemonLdflags = "-s -w -linkmode=internal -X github.com/moby/moby/v2/dockerversion.Version=$UpstreamVersion -X github.com/moby/moby/v2/dockerversion.GitCommit=$MobyCommit -X github.com/moby/moby/v2/dockerversion.BuildTime=$MobyCommitDate -X 'github.com/moby/moby/v2/dockerversion.PlatformName=Docker Engine - Community' -X 'github.com/moby/moby/v2/dockerversion.ProductName=Docker Engine - Community' -X 'github.com/moby/moby/v2/dockerversion.DefaultProductLicense=Community Engine'"
-		& $go build -buildvcs=false -trimpath -tags daemon -ldflags $daemonLdflags -o $dockerdBuild ./cmd/dockerd
-		if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $dockerdBuild -PathType Leaf)) {
-			throw "Docker daemon source build failed with exit code $LASTEXITCODE."
-		}
+		Invoke-TlcNativeCommand -FilePath $go `
+			-ArgumentList @('build', '-buildvcs=false', '-trimpath', '-tags', 'daemon', '-ldflags', $daemonLdflags, '-o', $dockerdBuild, './cmd/dockerd') `
+			-FailureMessage 'Docker daemon source build failed'
+		if (-not (Test-Path -LiteralPath $dockerdBuild -PathType Leaf)) { throw 'Docker daemon source build did not produce dockerd.exe.' }
 		Pop-Location
 		$locationPushed = $false
 
 		foreach ($binary in @($dockerBuild, $dockerdBuild)) {
-			$buildMetadata = (& $go version -m $binary | Out-String)
-			if ($LASTEXITCODE -ne 0 -or $buildMetadata -notmatch "(?m)^$([regex]::Escape($binary)):\s+$([regex]::Escape($GoToolchain))\s*$") {
+			$buildMetadata = Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('version', '-m', $binary) `
+				-FailureMessage "Could not inspect $([IO.Path]::GetFileName($binary)) build metadata" -PassThru
+			if ($buildMetadata -notmatch "(?m)^$([regex]::Escape($binary)):\s+$([regex]::Escape($GoToolchain))\s*$") {
 				throw "$([IO.Path]::GetFileName($binary)) was not built with required toolchain $GoToolchain."
 			}
-			$versionText = (& $binary --version | Out-String)
-			if ($LASTEXITCODE -ne 0 -or $versionText -notmatch "Docker version $([regex]::Escape($UpstreamVersion)),") {
+			$versionText = Invoke-TlcNativeCommand -FilePath $binary -ArgumentList @('--version') `
+				-FailureMessage "$([IO.Path]::GetFileName($binary)) version check failed" -PassThru
+			if ($versionText -notmatch "Docker version $([regex]::Escape($UpstreamVersion)),") {
 				throw "$([IO.Path]::GetFileName($binary)) did not report Docker $UpstreamVersion."
 			}
 		}

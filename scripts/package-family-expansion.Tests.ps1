@@ -87,11 +87,10 @@ Describe 'Expanded package family lifecycles' {
 		$infoPath = Join-Path $script:TempRoot 'module.info'
 		[IO.File]::WriteAllText($infoPath, '{"Time":"2026-08-15T12:00:00Z"}')
 		$script:GoInfoPath = $infoPath
-		function global:go-fixture {
-			$call = $args -join ' '
-			$global:LASTEXITCODE = 0
+		Mock Invoke-TlcNativeCommand {
+			$call = $ArgumentList -join ' '
 			if ($call -eq 'list -m all') {
-				return @(
+				return (@(
 					'toolchains.local/test v0.0.0',
 					'k8s.io/component-base v0.34.2',
 					'k8s.io/kubectl v0.34.2',
@@ -99,14 +98,14 @@ Describe 'Expanded package family lifecycles' {
 					'golang.org/x/net v0.56.0',
 					'golang.org/x/sys v0.46.0',
 					'golang.org/x/text v0.39.0'
-				)
+				) -join [Environment]::NewLine)
 			}
 			if ($call -like 'mod download -json*') {
 				return (@{ Origin = @{ Hash = 'a' * 40 }; Info = $script:GoInfoPath } | ConvertTo-Json -Compress)
 			}
-			if ($args[0] -eq 'build') {
-				$index = [Array]::IndexOf([object[]]$args, '-o')
-				[IO.File]::WriteAllText([string]$args[$index + 1], 'kubectl')
+			if ($ArgumentList[0] -eq 'build') {
+				$index = [Array]::IndexOf([object[]]$ArgumentList, '-o')
+				[IO.File]::WriteAllText([string]$ArgumentList[$index + 1], 'kubectl')
 			}
 		}
 		Mock Get-TlcApplicationPath { 'go-fixture' }
@@ -119,6 +118,7 @@ Describe 'Expanded package family lifecycles' {
 		Test-Path -LiteralPath (Get-TlcPkgPath 'kubectl.exe') | Should -BeTrue
 		Test-TlcPackageInstall
 		Should -Invoke Toolchain -Times 1
+		Should -Invoke Invoke-TlcNativeCommand -Times 6 -Exactly
 	}
 
 	It 'rejects malformed kubectl upstream version text' {
@@ -209,18 +209,18 @@ Describe 'Verified Go builds and network cache behavior' {
 	}
 
 	It 'builds a Go command after proving minimum module versions' {
-		function global:go-fixture {
-			$global:LASTEXITCODE = 0
-			if (($args -join ' ') -like 'list -m -f*example.test/dependency') { return 'v1.3.0' }
-			if ($args[0] -eq 'build') {
-				$index = [Array]::IndexOf([object[]]$args, '-o')
-				[IO.File]::WriteAllText([string]$args[$index + 1], 'binary')
+		Mock Get-TlcApplicationPath { 'go-fixture' }
+		Mock Invoke-TlcNativeCommand {
+			if ($ArgumentList[0] -eq 'list') { return 'v1.3.0' }
+			if ($ArgumentList[0] -eq 'build') {
+				$index = [Array]::IndexOf([object[]]$ArgumentList, '-o')
+				[IO.File]::WriteAllText([string]$ArgumentList[$index + 1], 'binary')
 			}
 		}
-		Mock Get-TlcApplicationPath { 'go-fixture' }
 		$output = Join-Path $env:TLC_PKG_ROOT 'tool.exe'
 		Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 -Command ./cmd/tool -OutputPath $output -MinimumModules @{ 'example.test/dependency' = 'v1.2.0' } -BuildTags release -LdFlags '-s'
 		Test-Path -LiteralPath $output -PathType Leaf | Should -BeTrue
+		Should -Invoke Invoke-TlcNativeCommand -Times 4 -Exactly
 	}
 
 	It 'downloads once, records a verified cache entry, and reuses it' {

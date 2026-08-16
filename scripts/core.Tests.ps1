@@ -96,6 +96,8 @@ Describe 'Local execution environment' {
 
 	It 'expands string arrays and rejects non-string values' {
 		Expand-TlcEnvValue -Value '${.}/bin' -PkgRoot $script:TempRoot | Should -Be "$script:TempRoot/bin"
+		$nestedPkgRoot = Join-Path $script:TempRoot 'pkg'
+		Expand-TlcEnvValue -Value '${.}' -PkgRoot $nestedPkgRoot | Should -BeExactly $nestedPkgRoot
 		@(Expand-TlcEnvValue -Value @('${.}/a', $null, '${.}/b') -PkgRoot $script:TempRoot).Count | Should -Be 2
 		{ Expand-TlcEnvValue -Value 7 -PkgRoot $script:TempRoot } | Should -Throw '*string or array*'
 		{ Expand-TlcEnvValue -Value @('ok', 7) -PkgRoot $script:TempRoot } | Should -Throw '*only strings*'

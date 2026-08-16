@@ -412,7 +412,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($dockerPackageText -match "MobyCommit = '[0-9a-f]{40}'") 'Docker daemon source is not pinned to an immutable upstream commit.'
 	Assert-True ($dockerPackageText -match 'ExpectedSha256') 'Docker CLI source archive is not checksum pinned.'
 	Assert-True ($dockerPackageText -match 'MobyExpectedSha256') 'Docker daemon source archive is not checksum pinned.'
-	Assert-True ($dockerPackageText -match 'go build -buildvcs=false -trimpath') 'Docker CLI is not built reproducibly from pinned source.'
+	Assert-True ($dockerPackageText -match "Invoke-TlcNativeCommand[\s\S]+?'build', '-buildvcs=false', '-trimpath'") 'Docker CLI is not built reproducibly from pinned source.'
+	Assert-True ($dockerPackageText -notmatch '& \$go') 'Docker Go commands bypass native exit-code isolation.'
 	Assert-True ($dockerPackageText -match "GoWinresVersion = 'v0\.3\.3'") 'Docker daemon Windows resource generator is not version pinned.'
 	Assert-True ($dockerPackageText -match 'go-winres build tool provenance') 'Docker daemon resource generator provenance is not verified.'
 	Assert-True ($dockerPackageText -match 'dockerd --version') 'Docker daemon compatibility validation is missing.'
@@ -604,12 +605,16 @@ function Test-ProductionReadinessPolicies {
 		'.\src\pkgs\kind.ps1',
 		'.\src\pkgs\kind-linux.ps1',
 		'.\src\pkgs\k3d.ps1',
-		'.\src\pkgs\k3d-linux.ps1'
+		'.\src\pkgs\k3d-linux.ps1',
+		'.\src\pkgs\docker.ps1',
+		'.\src\pkgs\dependabot.ps1'
 	)
 	foreach ($goSourceBuildScript in $goSourceBuildScripts) {
 		$goSourceBuildText = Get-Content -LiteralPath $goSourceBuildScript -Raw
 		Assert-True ($goSourceBuildText -match "Get-TlcApplicationPath -Name 'go'") "$goSourceBuildScript does not resolve exactly one Go executable."
 		Assert-True ($goSourceBuildText -notmatch '\$go\.Source') "$goSourceBuildScript can still concatenate multiple Go command sources."
+		Assert-True ($goSourceBuildText -match 'Invoke-TlcNativeCommand') "$goSourceBuildScript bypasses native exit-code isolation."
+		Assert-True ($goSourceBuildText -notmatch '(?m)&\s+(?:\$go|go)\s+(?:build|get|install|list|mod)\b') "$goSourceBuildScript can still turn successful Go stderr into a package failure."
 	}
 	foreach ($optionalX86Script in @(
 		'.\src\pkgs\jdk\jdk8.ps1', '.\src\pkgs\jdk\jdk11.ps1', '.\src\pkgs\jdk\jdk17.ps1',

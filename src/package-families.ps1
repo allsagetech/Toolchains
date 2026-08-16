@@ -350,8 +350,9 @@ function Initialize-TlcKubectlPackage {
 			$locationPushed = $true
 			$go = Get-TlcApplicationPath -Name 'go'
 
-			& $go mod init 'github.com/allsagetech/toolchains-kubectl-build'
-			if ($LASTEXITCODE -ne 0) { throw "kubectl build module initialization failed with exit code $LASTEXITCODE" }
+			Invoke-TlcNativeCommand -FilePath $go `
+				-ArgumentList @('mod', 'init', 'github.com/allsagetech/toolchains-kubectl-build') `
+				-FailureMessage 'kubectl build module initialization failed'
 			$modules = @(
 				"k8s.io/component-base@$moduleVersion"
 				"k8s.io/kubectl@$moduleVersion"
@@ -360,17 +361,18 @@ function Initialize-TlcKubectlPackage {
 				"golang.org/x/sys@$($TlcPackageConfig.KubernetesSysVersion)"
 				"golang.org/x/text@$($TlcPackageConfig.KubernetesTextVersion)"
 			)
-			& $go get @modules
-			if ($LASTEXITCODE -ne 0) { throw "checksum-verified kubectl dependency resolution failed with exit code $LASTEXITCODE" }
-			& $go mod tidy
-			if ($LASTEXITCODE -ne 0) { throw "kubectl dependency cleanup failed with exit code $LASTEXITCODE" }
+			Invoke-TlcNativeCommand -FilePath $go -ArgumentList (@('get') + $modules) `
+				-FailureMessage 'checksum-verified kubectl dependency resolution failed'
+			Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('mod', 'tidy') `
+				-FailureMessage 'kubectl dependency cleanup failed'
 
 			$resolvedModules = @{}
-			foreach ($line in @(& $go list -m all)) {
+			$resolvedModuleText = Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('list', '-m', 'all') `
+				-FailureMessage 'kubectl dependency verification failed' -PassThru
+			foreach ($line in @($resolvedModuleText -split '\r?\n')) {
 				$fields = @(([string]$line).Trim() -split '\s+')
 				if ($fields.Count -ge 2) { $resolvedModules[$fields[0]] = $fields[1] }
 			}
-			if ($LASTEXITCODE -ne 0) { throw "kubectl dependency verification failed with exit code $LASTEXITCODE" }
 			$requiredModules = [ordered]@{
 				'k8s.io/component-base' = $moduleVersion
 				'k8s.io/kubectl' = $moduleVersion
@@ -385,8 +387,9 @@ function Initialize-TlcKubectlPackage {
 				}
 			}
 
-			$downloadJson = (& $go mod download -json "k8s.io/kubectl@$moduleVersion" | Out-String)
-			if ($LASTEXITCODE -ne 0) { throw "kubectl module provenance lookup failed with exit code $LASTEXITCODE" }
+			$downloadJson = Invoke-TlcNativeCommand -FilePath $go `
+				-ArgumentList @('mod', 'download', '-json', "k8s.io/kubectl@$moduleVersion") `
+				-FailureMessage 'kubectl module provenance lookup failed' -PassThru
 			$download = $downloadJson | ConvertFrom-Json
 			$gitCommit = [string]$download.Origin.Hash
 			if ($gitCommit -notmatch '^[0-9a-f]{40}$') { throw 'kubectl module provenance did not contain a Git commit' }
@@ -404,8 +407,9 @@ function Initialize-TlcKubectlPackage {
 			) -join ' '
 
 			$outputName = if ($TlcPackageConfig.IsLinux) { 'kubectl' } else { 'kubectl.exe' }
-			& $go build -trimpath -buildvcs=false -ldflags $ldflags -o (Get-TlcPkgPath $outputName) .
-			if ($LASTEXITCODE -ne 0) { throw "verified kubectl source build failed with exit code $LASTEXITCODE" }
+			Invoke-TlcNativeCommand -FilePath $go `
+				-ArgumentList @('build', '-trimpath', '-buildvcs=false', '-ldflags', $ldflags, '-o', (Get-TlcPkgPath $outputName), '.') `
+				-FailureMessage 'verified kubectl source build failed'
 		} finally {
 			if ($locationPushed) { Pop-Location }
 			foreach ($name in $previous.Keys) {

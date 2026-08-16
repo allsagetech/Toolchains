@@ -203,6 +203,35 @@ Describe 'Utility integrity and metadata helpers' {
 		{ Get-TlcApplicationPath -Name 'definitely-not-a-real-toolchain-command' } | Should -Throw
 	}
 
+	It 'isolates native stderr and fails only on a nonzero process exit' {
+		ConvertTo-TlcNativeCommandLineArgument -Argument plain | Should -BeExactly 'plain'
+		ConvertTo-TlcNativeCommandLineArgument -Argument '' | Should -BeExactly '""'
+		ConvertTo-TlcNativeCommandLineArgument -Argument 'two words' | Should -BeExactly '"two words"'
+		ConvertTo-TlcNativeCommandLineArgument -Argument 'quoted"value' | Should -BeExactly '"quoted\"value"'
+		ConvertTo-TlcNativeCommandLineArgument -Argument 'C:\Program Files\tool\' | Should -BeExactly '"C:\Program Files\tool\\"'
+
+		$hostExecutable = (Get-Process -Id $PID).Path
+		$errorsBefore = $Error.Count
+		$output = Invoke-TlcNativeCommand -FilePath $hostExecutable -ArgumentList @(
+			'-NoProfile', '-NonInteractive', '-Command',
+			'[Console]::Error.WriteLine(123);[Console]::Out.WriteLine(456);exit 0'
+		) -FailureMessage 'native success probe failed' -PassThru 6>$null
+		$output.Trim() | Should -BeExactly '456'
+		($Error.Count - $errorsBefore) | Should -Be 0
+		$nativeWorkingDirectory = Invoke-TlcNativeCommand -FilePath $hostExecutable -ArgumentList @(
+			'-NoProfile', '-NonInteractive', '-Command',
+			'[Console]::Out.Write([Environment]::CurrentDirectory);exit 0'
+		) -FailureMessage 'native working-directory probe failed' -PassThru 6>$null
+		[IO.Path]::GetFullPath($nativeWorkingDirectory.Trim()) | Should -BeExactly ([IO.Path]::GetFullPath((Get-Location).ProviderPath))
+
+		{
+			Invoke-TlcNativeCommand -FilePath $hostExecutable -ArgumentList @(
+				'-NoProfile', '-NonInteractive', '-Command',
+				'[Console]::Out.WriteLine(678);[Console]::Error.WriteLine(789);exit 7'
+			) -FailureMessage 'native failure probe failed' 6>$null
+		} | Should -Throw '*native failure probe failed*exit code 7*678*789*'
+	}
+
 	It 'builds Hugging Face headers, slugs, versions, and allowlists' {
 		$env:HF_TOKEN = 'secret'
 		(Get-TlcHfHeaders).Authorization | Should -Be 'Bearer secret'

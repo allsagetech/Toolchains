@@ -43,11 +43,10 @@ function global:Install-TlcPackage {
 
     $VersionTag = $Latest.name
 
-    & go install ("github.com/dependabot/cli/cmd/dependabot@{0}" -f $VersionTag)
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "go install for dependabot failed with exit code $LASTEXITCODE. Make sure the 'go' package is installed and on PATH."
-    }
+	$go = Get-TlcApplicationPath -Name 'go'
+	Invoke-TlcNativeCommand -FilePath $go `
+		-ArgumentList @('install', ("github.com/dependabot/cli/cmd/dependabot@{0}" -f $VersionTag)) `
+		-FailureMessage "go install for dependabot failed; make sure the 'go' package is installed and on PATH"
 
     Write-TlcVars @{
         env = @{

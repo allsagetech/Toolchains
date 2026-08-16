@@ -40,8 +40,8 @@ function global:Install-TlcPackage {
 		$env:GOTOOLCHAIN = $TlcPackageConfig.GoToolchain
 		$env:GOWORK = 'off'
 		$go = Get-TlcApplicationPath -Name 'go'
-		& $go install "sigs.k8s.io/kind@v$($TlcPackageConfig.Version)"
-		if ($LASTEXITCODE -ne 0) { throw "verified kind source build failed with exit code $LASTEXITCODE" }
+		Invoke-TlcNativeCommand -FilePath $go -ArgumentList @('install', "sigs.k8s.io/kind@v$($TlcPackageConfig.Version)") `
+			-FailureMessage 'verified kind source build failed'
 	} finally {
 		foreach ($name in $previous.Keys) {
 			if ($null -eq $previous[$name]) { Remove-Item -LiteralPath "env:$name" -ErrorAction SilentlyContinue }

@@ -20,6 +20,90 @@ function Get-TlcApplicationPath {
 	return [string]$command.Source
 }
 
+function ConvertTo-TlcNativeCommandLineArgument {
+	param([AllowEmptyString()][string]$Argument)
+
+	if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') { return $Argument }
+
+	$quoted = [Text.StringBuilder]::new()
+	[void]$quoted.Append('"')
+	$backslashes = 0
+	foreach ($character in $Argument.ToCharArray()) {
+		if ($character -eq '\') {
+			$backslashes++
+			continue
+		}
+		if ($character -eq '"') {
+			[void]$quoted.Append(('\' * (($backslashes * 2) + 1)))
+			[void]$quoted.Append('"')
+			$backslashes = 0
+			continue
+		}
+		if ($backslashes -gt 0) {
+			[void]$quoted.Append(('\' * $backslashes))
+			$backslashes = 0
+		}
+		[void]$quoted.Append($character)
+	}
+	if ($backslashes -gt 0) { [void]$quoted.Append(('\' * ($backslashes * 2))) }
+	[void]$quoted.Append('"')
+	return $quoted.ToString()
+}
+
+function Invoke-TlcNativeCommand {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$FilePath,
+		[AllowEmptyCollection()][string[]]$ArgumentList = @(),
+		[Parameter(Mandatory=$true)][string]$FailureMessage,
+		[switch]$PassThru
+	)
+
+	$startInfo = [Diagnostics.ProcessStartInfo]::new()
+	$startInfo.FileName = $FilePath
+	$startInfo.CreateNoWindow = $true
+	$startInfo.UseShellExecute = $false
+	$startInfo.RedirectStandardOutput = $true
+	$startInfo.RedirectStandardError = $true
+	$currentLocation = Get-Location
+	if ($currentLocation.Provider.Name -eq 'FileSystem') { $startInfo.WorkingDirectory = $currentLocation.ProviderPath }
+	if ($startInfo.PSObject.Properties['ArgumentList']) {
+		foreach ($argument in $ArgumentList) { [void]$startInfo.ArgumentList.Add([string]$argument) }
+	} else {
+		$startInfo.Arguments = (($ArgumentList | ForEach-Object { ConvertTo-TlcNativeCommandLineArgument -Argument ([string]$_) }) -join ' ')
+	}
+
+	$process = [Diagnostics.Process]::new()
+	$process.StartInfo = $startInfo
+	try {
+		try {
+			if (-not $process.Start()) { throw 'the process did not start' }
+		} catch {
+			throw "$FailureMessage. Could not start '$FilePath': $($_.Exception.Message)"
+		}
+		$standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+		$standardErrorTask = $process.StandardError.ReadToEndAsync()
+		$process.WaitForExit()
+		$standardOutput = $standardOutputTask.GetAwaiter().GetResult()
+		$standardError = $standardErrorTask.GetAwaiter().GetResult()
+		$exitCode = $process.ExitCode
+	} finally {
+		$process.Dispose()
+	}
+
+	if ($exitCode -ne 0) {
+		$details = @()
+		if (-not [string]::IsNullOrWhiteSpace($standardOutput)) { $details += "stdout:`n$($standardOutput.TrimEnd())" }
+		if (-not [string]::IsNullOrWhiteSpace($standardError)) { $details += "stderr:`n$($standardError.TrimEnd())" }
+		$detailText = if ($details.Count -gt 0) { "`n$($details -join [Environment]::NewLine)" } else { '' }
+		throw "$FailureMessage (exit code $exitCode).$detailText"
+	}
+
+	if (-not [string]::IsNullOrWhiteSpace($standardError)) { Write-Host $standardError.TrimEnd() }
+	if ($PassThru) { return $standardOutput }
+	if (-not [string]::IsNullOrWhiteSpace($standardOutput)) { Write-Host $standardOutput.TrimEnd() }
+}
+
 function Invoke-TlcVerifiedGoCommandBuild {
 	param(
 		[Parameter(Mandatory=$true)][string]$Module,
@@ -55,20 +139,23 @@ function Invoke-TlcVerifiedGoCommandBuild {
 
 		Push-Location $buildRoot
 		$locationPushed = $true
-		& $go mod init "toolchains.local/patched-$([guid]::NewGuid().ToString('n'))"
-		if ($LASTEXITCODE -ne 0) { throw "Go module initialization failed with exit code $LASTEXITCODE" }
+		Invoke-TlcNativeCommand -FilePath $go `
+			-ArgumentList @('mod', 'init', "toolchains.local/patched-$([guid]::NewGuid().ToString('n'))") `
+			-FailureMessage 'Go module initialization failed'
 
 		$requirements = @("$Module@$Version")
 		foreach ($requiredModule in ($MinimumModules.Keys | Sort-Object)) {
 			$requirements += "$requiredModule@$($MinimumModules[$requiredModule])"
 		}
-		& $go get @requirements
-		if ($LASTEXITCODE -ne 0) { throw "verified Go source resolution failed with exit code $LASTEXITCODE" }
+		Invoke-TlcNativeCommand -FilePath $go -ArgumentList (@('get') + $requirements) `
+			-FailureMessage 'verified Go source resolution failed'
 
 		foreach ($requiredModule in ($MinimumModules.Keys | Sort-Object)) {
 			$minimumVersion = [string]$MinimumModules[$requiredModule]
-			$resolvedVersion = (& $go list -m -f '{{.Version}}' $requiredModule | Out-String).Trim()
-			if ($LASTEXITCODE -ne 0 -or $resolvedVersion -notmatch '^v?([0-9]+)\.([0-9]+)\.([0-9]+)$' -or $minimumVersion -notmatch '^v?([0-9]+)\.([0-9]+)\.([0-9]+)$') {
+			$resolvedVersion = (Invoke-TlcNativeCommand -FilePath $go `
+				-ArgumentList @('list', '-m', '-f', '{{.Version}}', $requiredModule) `
+				-FailureMessage "could not resolve Go module version for $requiredModule" -PassThru).Trim()
+			if ($resolvedVersion -notmatch '^v?([0-9]+)\.([0-9]+)\.([0-9]+)$' -or $minimumVersion -notmatch '^v?([0-9]+)\.([0-9]+)\.([0-9]+)$') {
 				throw "could not verify resolved Go module version for $requiredModule"
 			}
 			$resolvedSemanticVersion = [TlcSemanticVersion]::new($resolvedVersion.TrimStart('v'))
@@ -82,8 +169,8 @@ function Invoke-TlcVerifiedGoCommandBuild {
 		if (-not [string]::IsNullOrWhiteSpace($BuildTags)) { $buildArguments += @('-tags', $BuildTags) }
 		if (-not [string]::IsNullOrWhiteSpace($LdFlags)) { $buildArguments += @('-ldflags', $LdFlags) }
 		$buildArguments += @('-o', $OutputPath, $Command)
-		& $go @buildArguments
-		if ($LASTEXITCODE -ne 0) { throw "verified Go command build failed with exit code $LASTEXITCODE" }
+		Invoke-TlcNativeCommand -FilePath $go -ArgumentList $buildArguments `
+			-FailureMessage 'verified Go command build failed'
 		if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { throw "Go command build did not produce $OutputPath" }
 	} finally {
 		if ($locationPushed) { Pop-Location }
