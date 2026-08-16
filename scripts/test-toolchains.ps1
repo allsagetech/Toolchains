@@ -399,18 +399,42 @@ function Test-ProductionReadinessPolicies {
 		$verifiedText = Get-Content -LiteralPath $verifiedScript -Raw
 		Assert-True ($verifiedText -match 'ExpectedSha256') "$verifiedScript does not pass its publisher SHA-256 to the common downloader."
 	}
-	foreach ($verifiedScript in @('.\src\pkgs\docker.ps1', '.\src\pkgs\nasm.ps1', '.\src\pkgs\zstd.ps1')) {
+	foreach ($verifiedScript in @('.\src\pkgs\nasm.ps1', '.\src\pkgs\zstd.ps1')) {
 		$config = (Read-TlcPackageDescriptor -Path $verifiedScript).Config
 		$text = Get-Content -LiteralPath $verifiedScript -Raw
 		Assert-True (Get-TlcPackagePublicationState -Config $config).VerifiedDownloads "$verifiedScript remains provenance-quarantined."
 		Assert-True ($text -match 'ExpectedSha256') "$verifiedScript does not pass its reviewed SHA-256 to the common downloader."
 		Assert-True ($text -match 'microsoft/winget-pkgs commit') "$verifiedScript does not identify the independent checksum provenance."
 	}
+	$dockerPackageText = Get-Content -LiteralPath .\src\pkgs\docker.ps1 -Raw
+	Assert-True ($dockerPackageText -match "GoToolchain = 'go1\.26\.6'") 'Docker CLI is not rebuilt with the patched Go toolchain.'
+	Assert-True ($dockerPackageText -match "UpstreamCommit = '[0-9a-f]{40}'") 'Docker CLI source is not pinned to an immutable upstream commit.'
+	Assert-True ($dockerPackageText -match "MobyCommit = '[0-9a-f]{40}'") 'Docker daemon source is not pinned to an immutable upstream commit.'
+	Assert-True ($dockerPackageText -match 'ExpectedSha256') 'Docker CLI source archive is not checksum pinned.'
+	Assert-True ($dockerPackageText -match 'MobyExpectedSha256') 'Docker daemon source archive is not checksum pinned.'
+	Assert-True ($dockerPackageText -match 'go build -buildvcs=false -trimpath') 'Docker CLI is not built reproducibly from pinned source.'
+	Assert-True ($dockerPackageText -match "GoWinresVersion = 'v0\.3\.3'") 'Docker daemon Windows resource generator is not version pinned.'
+	Assert-True ($dockerPackageText -match 'go-winres build tool provenance') 'Docker daemon resource generator provenance is not verified.'
+	Assert-True ($dockerPackageText -match 'dockerd --version') 'Docker daemon compatibility validation is missing.'
+	Assert-True ($dockerPackageText -notmatch 'download\.docker\.com/win/static') 'Docker package still consumes the vulnerable prebuilt Windows bundle.'
+	$nodeFamilyText = Get-Content -LiteralPath .\src\package-families.ps1 -Raw
+	Assert-True ($nodeFamilyText -match 'Invoke-TlcWebRequest[\s\S]+-ExpectedHashAlgorithm SHA512') 'Pinned npm archives are not verified with registry SHA-512 integrity.'
+	Assert-True ($nodeFamilyText -match "'-tzf'[\s\S]+contains an unsafe path") 'Pinned npm archives are not checked for path traversal before extraction.'
+	Assert-True ($nodeFamilyText -match "'-tvzf'[\s\S]+contains links") 'Pinned npm archives do not reject links before extraction.'
+	Assert-True ($nodeFamilyText -match 'npm archive identity mismatch') 'Pinned npm archive name and version are not verified after extraction.'
 	foreach ($nodeMajor in @(22, 24)) {
 		$config = (Read-TlcPackageDescriptor -Path ".\src\pkgs\node\node$nodeMajor.ps1").Config
 		$nodePublication = Get-TlcPackagePublicationState -Config $config
 		Assert-True $nodePublication.VerifiedDownloads "Node $nodeMajor archive is not checksum verified."
 		Assert-True $nodePublication.PublishEligible "Node $nodeMajor remains statically quarantined after the upstream security release."
+		Assert-True ($config.BuildRevision -eq 1) "Node $nodeMajor patched package does not carry a republishable build revision."
+		Assert-True ($config.NpmVersion -eq '12.0.2') "Node $nodeMajor does not pin the remediated npm release."
+		Assert-True ($config.NpmExpectedSha512 -match '^[0-9a-f]{128}$') "Node $nodeMajor npm archive does not pin registry SHA-512 integrity."
+		Assert-True ($config.NpmDependencyOverlays['brace-expansion'].Version -eq '5.0.9') "Node $nodeMajor does not overlay the fixed brace-expansion release."
+		Assert-True ($config.NpmDependencyOverlays['ip-address'].Version -eq '10.5.0') "Node $nodeMajor does not overlay the fixed ip-address release."
+		foreach ($overlayName in @('brace-expansion', 'ip-address')) {
+			Assert-True ($config.NpmDependencyOverlays[$overlayName].ExpectedSha512 -match '^[0-9a-f]{128}$') "Node $nodeMajor $overlayName overlay does not pin registry SHA-512 integrity."
+		}
 	}
 	$sevenZipPackageText = Get-Content -LiteralPath .\src\pkgs\7-zip.ps1 -Raw
 	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'

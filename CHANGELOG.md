@@ -25,8 +25,9 @@
 - Rebuild K9s 0.51.0 for Windows and Linux from checksum-database-verified Go modules with a patched Go toolchain and dependency graph.
 - Rebuild kubectl for Windows and Linux from checksum-verified Go modules with patched Go, `x/net`, `x/sys`, and `x/text` dependencies.
 - Rebuild Cue and Helm from checksum-verified Go modules with fixed `x/text` and `oras-go` dependencies.
-- Restore Node 22 and Node 24 to the normal fail-closed scan gate after patched upstream security releases, without vulnerability exceptions.
-- Verify Docker, NASM, and Zstandard with version-pinned SHA-256 values independently reviewed through immutable Microsoft WinGet manifest commits.
+- Restore Node 22 and Node 24 to the normal fail-closed scan gate with checksum-verified npm 12.0.2 and fixed dependency overlays, without vulnerability exceptions.
+- Rebuild Docker CLI and daemon 29.7.2 from their immutable upstream commits with Go 1.26.6, preserving Windows service resources while removing vulnerable Go 1.26.5 binaries, and verify both source archives with pinned SHA-256 values.
+- Verify NASM and Zstandard with version-pinned SHA-256 values independently reviewed through immutable Microsoft WinGet manifest commits.
 - Exclude caches and temporary build content from published images.
 - Fail closed when signing or compatibility contracts are required.
 - Reduce CI permissions and secret exposure to protected release jobs.

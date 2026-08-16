@@ -4,38 +4,132 @@ Copyright (c) 2026 AllSageTech
 SPDX-License-Identifier: MPL-2.0
 #>
 
+function Install-TlcPinnedNpmArchive {
+	param(
+		[Parameter(Mandatory=$true)][ValidatePattern('^[a-z0-9][a-z0-9._-]*$')][string]$Name,
+		[Parameter(Mandatory=$true)][ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')][string]$Version,
+		[Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-fA-F]{128}$')][string]$ExpectedSha512,
+		[Parameter(Mandatory=$true)][string]$Destination
+	)
+
+	$encodedName = [uri]::EscapeDataString($Name)
+	$archiveBaseName = "$($Name.Replace('/', '-'))-$Version"
+	$archiveName = "$archiveBaseName.tgz"
+	$archiveUri = "https://registry.npmjs.org/$encodedName/-/$archiveName"
+	$archivePath = Get-TlcStagingPath $archiveName
+	$extractRoot = Get-TlcStagingPath "$archiveBaseName-extract"
+	$packageRoot = [IO.Path]::GetFullPath((Get-TlcPkgRoot)).TrimEnd('\', '/')
+	$packagePrefix = $packageRoot + [IO.Path]::DirectorySeparatorChar
+	$destinationPath = [IO.Path]::GetFullPath($Destination)
+	if (-not $destinationPath.StartsWith($packagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+		throw "Refusing to install npm archive outside package root: $destinationPath"
+	}
+
+	try {
+		if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
+		New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+		Invoke-TlcWebRequest -Uri $archiveUri -OutFile $archivePath -ExpectedHash $ExpectedSha512 -ExpectedHashAlgorithm SHA512 | Out-Null
+
+		$tar = Get-TlcApplicationPath -Name 'tar'
+		$entries = @(& $tar '-tzf' $archivePath)
+		if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw "Could not list verified npm archive $archiveName." }
+		foreach ($entry in $entries) {
+			$normalized = ([string]$entry).Replace('\', '/')
+			$segments = @($normalized.Split('/') | Where-Object { $_ })
+			if (($normalized -ne 'package') -and (-not $normalized.StartsWith('package/', [StringComparison]::Ordinal))) {
+				throw "npm archive $archiveName contains a path outside package/: $entry"
+			}
+			if ($segments -contains '..' -or $normalized.StartsWith('/') -or $normalized -match '^[A-Za-z]:' -or $normalized.IndexOf([char]0) -ge 0) {
+				throw "npm archive $archiveName contains an unsafe path: $entry"
+			}
+		}
+		$details = @(& $tar '-tvzf' $archivePath)
+		if ($LASTEXITCODE -ne 0) { throw "Could not inspect verified npm archive $archiveName." }
+		if (@($details | Where-Object { $_.TrimStart() -match '^[lh]' }).Count -gt 0) {
+			throw "npm archive $archiveName contains links, which are not permitted."
+		}
+
+		& $tar '-xzf' $archivePath '-C' $extractRoot
+		if ($LASTEXITCODE -ne 0) { throw "Could not extract verified npm archive $archiveName." }
+		$source = Join-Path $extractRoot 'package'
+		$manifestPath = Join-Path $source 'package.json'
+		if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "npm archive $archiveName has no package manifest." }
+		$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+		if ([string]$manifest.name -cne $Name -or [string]$manifest.version -cne $Version) {
+			throw "npm archive identity mismatch: expected $Name@$Version, got $($manifest.name)@$($manifest.version)."
+		}
+		if (Test-Path -LiteralPath $destinationPath) { Remove-Item -LiteralPath $destinationPath -Recurse -Force }
+		New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
+		Move-Item -LiteralPath $source -Destination $destinationPath
+	} finally {
+		Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+		Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+	}
+}
+
 function Initialize-TlcNodePackage {
 	param(
 		[Parameter(Mandatory=$true)][int]$Major,
-		[string]$LifecycleNote
+		[string]$LifecycleNote,
+		[ValidateRange(0, 999)][int]$BuildRevision = 0,
+		[string]$NpmVersion,
+		[ValidatePattern('^$|^[0-9a-fA-F]{128}$')][string]$NpmExpectedSha512,
+		[hashtable]$NpmDependencyOverlays = @{}
 	)
+	if ([bool]$NpmVersion -xor [bool]$NpmExpectedSha512) {
+		throw 'NpmVersion and NpmExpectedSha512 must be provided together.'
+	}
 
 	$global:TlcPackageConfig = @{
 		Name = 'node'
 		Matcher = "^node-$Major\."
 		FamilyMajor = $Major
 		LifecycleNote = $LifecycleNote
+		BuildRevision = $BuildRevision
+		NpmVersion = $NpmVersion
+		NpmExpectedSha512 = $NpmExpectedSha512
+		NpmDependencyOverlays = $NpmDependencyOverlays
 	}
 
 	function global:Install-TlcPackage {
 		$major = [int]$TlcPackageConfig.FamilyMajor
 		$latest = Get-GitHubTag -Owner 'nodejs' -Repo 'node' -TagPattern "^v($major)\.([0-9]+)\.([0-9]+)$"
-		$TlcPackageConfig.UpToDate = -not $latest.Version.LaterThan($TlcPackageConfig.Latest)
-		$TlcPackageConfig.Version = $latest.Version.ToString()
+		$upstreamVersion = $latest.Version.ToString()
+		$packageVersion = if ([int]$TlcPackageConfig.BuildRevision -gt 0) { "$upstreamVersion+$($TlcPackageConfig.BuildRevision)" } else { $upstreamVersion }
+		$packageSemanticVersion = [TlcSemanticVersion]::new($packageVersion)
+		$TlcPackageConfig.UpToDate = -not $packageSemanticVersion.LaterThan($TlcPackageConfig.Latest)
+		$TlcPackageConfig.Version = $packageVersion
 		if ($TlcPackageConfig.UpToDate) { return }
 
 		$tag = $latest.name
 		$assetName = "node-$tag-win-x64.zip"
 		Install-BuildTool -AssetName $assetName -AssetURL "https://nodejs.org/dist/$tag/$assetName"
+		$nodeExecutable = Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'node.exe' | Select-Object -First 1
+		if (-not $nodeExecutable) { throw "$assetName did not contain node.exe." }
+		$nodeRoot = $nodeExecutable.DirectoryName
+		if ($TlcPackageConfig.NpmVersion) {
+			$npmRoot = Join-Path $nodeRoot 'node_modules\npm'
+			Install-TlcPinnedNpmArchive -Name 'npm' -Version $TlcPackageConfig.NpmVersion `
+				-ExpectedSha512 $TlcPackageConfig.NpmExpectedSha512 -Destination $npmRoot
+			foreach ($dependencyName in @($TlcPackageConfig.NpmDependencyOverlays.Keys | Sort-Object)) {
+				$overlay = $TlcPackageConfig.NpmDependencyOverlays[$dependencyName]
+				Install-TlcPinnedNpmArchive -Name $dependencyName -Version $overlay.Version `
+					-ExpectedSha512 $overlay.ExpectedSha512 -Destination (Join-Path $npmRoot "node_modules\$dependencyName")
+			}
+		}
 		Write-TlcVars @{
 			env = @{
-				path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'node.exe' | Select-Object -First 1).DirectoryName
+				path = $nodeRoot
 			}
 		}
 	}
 
 	function global:Test-TlcPackageInstall {
-		Toolchain exec (Get-TlcPkgUri) { node --version }
+		if ($TlcPackageConfig.NpmVersion) {
+			Toolchain exec (Get-TlcPkgUri) { node --version; npm --version; npx --version }
+		} else {
+			Toolchain exec (Get-TlcPkgUri) { node --version }
+		}
 	}
 }
 

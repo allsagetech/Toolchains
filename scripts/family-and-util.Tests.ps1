@@ -3,6 +3,28 @@
 BeforeAll {
 	$script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 	. (Join-Path $script:RepoRoot 'src/main.ps1')
+	function global:Invoke-TlcFixtureTar {
+		$mode = [string]$args[0]
+		$global:LASTEXITCODE = 0
+		switch ($mode) {
+			'-tzf' { return @($global:TlcFixtureTarEntries) }
+			'-tvzf' { return @($global:TlcFixtureTarDetails) }
+			'-xzf' {
+				$destinationIndex = [Array]::IndexOf($args, '-C')
+				$extractRoot = [string]$args[$destinationIndex + 1]
+				$packageRoot = Join-Path $extractRoot 'package'
+				New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+				[ordered]@{ name = $global:TlcFixtureTarName; version = $global:TlcFixtureTarVersion } |
+					ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'package.json') -Encoding utf8
+			}
+			default { $global:LASTEXITCODE = 2 }
+		}
+	}
+}
+
+AfterAll {
+	Remove-Item Function:\Invoke-TlcFixtureTar -Force -ErrorAction SilentlyContinue
+	Remove-Variable TlcFixtureTarEntries,TlcFixtureTarDetails,TlcFixtureTarName,TlcFixtureTarVersion -Scope Global -ErrorAction SilentlyContinue
 }
 
 Describe 'Package family lifecycle helpers' {
@@ -34,6 +56,90 @@ Describe 'Package family lifecycle helpers' {
 		$global:TlcPackageConfig.UpToDate | Should -BeFalse
 		Should -Invoke Install-BuildTool -Times 1
 		Should -Invoke Write-TlcVars -Times 1
+	}
+
+	It 'revisions Node packages and installs each pinned npm security overlay' {
+		$hash = 'a' * 128
+		Initialize-TlcNodePackage -Major 22 -BuildRevision 1 -NpmVersion '12.0.2' -NpmExpectedSha512 $hash `
+			-NpmDependencyOverlays @{
+				'brace-expansion' = @{ Version = '5.0.9'; ExpectedSha512 = $hash }
+				'ip-address' = @{ Version = '10.5.0'; ExpectedSha512 = $hash }
+			}
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('22.3.1')
+		Mock Get-GitHubTag { @{ name = 'v22.3.1'; Version = [TlcSemanticVersion]::new('22.3.1') } }
+		Mock Install-BuildTool {}
+		Mock Get-ChildItem { [pscustomobject]@{ DirectoryName = (Join-Path $env:TLC_PKG_ROOT 'node') } }
+		Mock Install-TlcPinnedNpmArchive {}
+		Mock Write-TlcVars {}
+		Install-TlcPackage
+		$global:TlcPackageConfig.Version | Should -Be '22.3.1+1'
+		$global:TlcPackageConfig.UpToDate | Should -BeFalse
+		Should -Invoke Install-TlcPinnedNpmArchive -Times 3 -Exactly
+		Should -Invoke Install-TlcPinnedNpmArchive -Times 1 -Exactly -ParameterFilter { $Name -eq 'npm' -and $Version -eq '12.0.2' }
+		Should -Invoke Install-TlcPinnedNpmArchive -Times 1 -Exactly -ParameterFilter { $Name -eq 'brace-expansion' -and $Version -eq '5.0.9' }
+		Should -Invoke Install-TlcPinnedNpmArchive -Times 1 -Exactly -ParameterFilter { $Name -eq 'ip-address' -and $Version -eq '10.5.0' }
+	}
+
+	It 'installs a registry-integrity-verified npm archive inside the package root' {
+		$global:TlcFixtureTarEntries = @('package/package.json', 'package/bin/npm-cli.js')
+		$global:TlcFixtureTarDetails = @('-rw-r--r-- package/package.json', '-rw-r--r-- package/bin/npm-cli.js')
+		$global:TlcFixtureTarName = 'npm'
+		$global:TlcFixtureTarVersion = '12.0.2'
+		Mock Get-TlcApplicationPath { 'Invoke-TlcFixtureTar' } -ParameterFilter { $Name -eq 'tar' }
+		Mock Invoke-TlcWebRequest {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutFile) -Force | Out-Null
+			Set-Content -LiteralPath $OutFile -Value 'fixture' -NoNewline
+		}
+		$destination = Join-Path $env:TLC_PKG_ROOT 'node\node_modules\npm'
+		Install-TlcPinnedNpmArchive -Name npm -Version '12.0.2' -ExpectedSha512 ('a' * 128) -Destination $destination
+		$manifest = Get-Content -LiteralPath (Join-Path $destination 'package.json') -Raw | ConvertFrom-Json
+		$manifest.name | Should -BeExactly 'npm'
+		$manifest.version | Should -BeExactly '12.0.2'
+		Should -Invoke Invoke-TlcWebRequest -Times 1 -Exactly -ParameterFilter {
+			$Uri -eq 'https://registry.npmjs.org/npm/-/npm-12.0.2.tgz' -and
+			$ExpectedHashAlgorithm -eq 'SHA512' -and $ExpectedHash -eq ('a' * 128)
+		}
+	}
+
+	It 'rejects npm archive traversal and link entries before extraction' {
+		$global:TlcFixtureTarName = 'npm'
+		$global:TlcFixtureTarVersion = '12.0.2'
+		Mock Get-TlcApplicationPath { 'Invoke-TlcFixtureTar' } -ParameterFilter { $Name -eq 'tar' }
+		Mock Invoke-TlcWebRequest {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutFile) -Force | Out-Null
+			Set-Content -LiteralPath $OutFile -Value 'fixture' -NoNewline
+		}
+		$destination = Join-Path $env:TLC_PKG_ROOT 'node\node_modules\npm'
+		$global:TlcFixtureTarEntries = @('package/../escape')
+		$global:TlcFixtureTarDetails = @('-rw-r--r-- package/../escape')
+		{ Install-TlcPinnedNpmArchive -Name npm -Version '12.0.2' -ExpectedSha512 ('a' * 128) -Destination $destination } |
+			Should -Throw '*unsafe path*'
+		$global:TlcFixtureTarEntries = @('package/package.json')
+		$global:TlcFixtureTarDetails = @('lrwxr-xr-x package/link -> ../../escape')
+		{ Install-TlcPinnedNpmArchive -Name npm -Version '12.0.2' -ExpectedSha512 ('a' * 128) -Destination $destination } |
+			Should -Throw '*contains links*'
+	}
+
+	It 'rejects npm archive identity mismatches and destinations outside the package root' {
+		$global:TlcFixtureTarEntries = @('package/package.json')
+		$global:TlcFixtureTarDetails = @('-rw-r--r-- package/package.json')
+		$global:TlcFixtureTarName = 'not-npm'
+		$global:TlcFixtureTarVersion = '12.0.2'
+		Mock Get-TlcApplicationPath { 'Invoke-TlcFixtureTar' } -ParameterFilter { $Name -eq 'tar' }
+		Mock Invoke-TlcWebRequest {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutFile) -Force | Out-Null
+			Set-Content -LiteralPath $OutFile -Value 'fixture' -NoNewline
+		}
+		$destination = Join-Path $env:TLC_PKG_ROOT 'node\node_modules\npm'
+		{ Install-TlcPinnedNpmArchive -Name npm -Version '12.0.2' -ExpectedSha512 ('a' * 128) -Destination $destination } |
+			Should -Throw '*identity mismatch*'
+		$outside = Join-Path $script:TempRoot 'outside\npm'
+		{ Install-TlcPinnedNpmArchive -Name npm -Version '12.0.2' -ExpectedSha512 ('a' * 128) -Destination $outside } |
+			Should -Throw '*outside package root*'
+		{ Install-TlcPinnedNpmArchive -Name '..\npm' -Version '12.0.2' -ExpectedSha512 ('a' * 128) -Destination $destination } |
+			Should -Throw
+		{ Install-TlcPinnedNpmArchive -Name npm -Version '..\12.0.2' -ExpectedSha512 ('a' * 128) -Destination $destination } |
+			Should -Throw
 	}
 
 	It 'short-circuits current Adoptium, K9s, and kubectl families' {

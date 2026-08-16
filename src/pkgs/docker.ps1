@@ -1,65 +1,147 @@
-<#
-Toolchains
-Copyright (c) 2026 AllSageTech
-SPDX-License-Identifier: MPL-2.0
-#>
+<# Toolchains | SPDX-License-Identifier: MPL-2.0 #>
 
 $global:TlcPackageConfig = @{
 	Name = 'docker'
 }
 
 function global:Install-TlcPackage {
-	# Independently reviewed checksum from microsoft/winget-pkgs commit
-	# 096356d4bd44c85b4e5a7b1752d57d61b114ff0b. The payload remains on
-	# Docker's official HTTPS origin and any byte change fails closed.
-	$DockerVersion = '29.7.2'
-	$ExpectedSha256 = 'ed9222f478a5d143ac90e8e2fd3209b5076382cdb4b210321f97aa4b68bc6811'
-	$upstream = [TlcSemanticVersion]::new($DockerVersion)
-	$TlcPackageConfig.Version = $DockerVersion
+	# Rebuild both executables from the exact upstream 29.7.2 commits with the
+	# first patched Go toolchain. The official Windows bundle embeds Go 1.26.5
+	# in docker.exe and dockerd.exe, and the publication scan rejects both.
+	$UpstreamVersion = '29.7.2'
+	$BuildRevision = 1
+	$UpstreamCommit = 'a7dcaa6fdb6ed04aacbfdc76357fdae01605609e'
+	$UpstreamCommitDate = '2026-08-05T17:34:15Z'
+	$ExpectedSha256 = '3cce08f4de9d3a34a2afd9080e4e6aa37c39c857243396979847f03d6e6e86c5'
+	$MobyCommit = '6a43e3d5afddf4111da0f864bbc7cae5d7e95001'
+	$MobyCommitDate = '2026-08-05T18:24:27Z'
+	$MobyExpectedSha256 = '075b3fbb7741f40c46f996747ab75853b423b69ac4c12af1adb618a7fc8d0a02'
+	$GoToolchain = 'go1.26.6'
+	$GoWinresVersion = 'v0.3.3'
+	$PackageVersion = "$UpstreamVersion+$BuildRevision"
+	$upstream = [TlcSemanticVersion]::new($PackageVersion)
+	$TlcPackageConfig.Version = $PackageVersion
 	$TlcPackageConfig.UpToDate = -not $upstream.LaterThan($TlcPackageConfig.Latest)
 	if ($TlcPackageConfig.UpToDate) { return }
 
-	$InstallRoot = Get-TlcPkgPath ("docker-{0}" -f $DockerVersion)
-
-    if (-not (Test-Path $InstallRoot)) {
-        New-Item -ItemType Directory -Path $InstallRoot | Out-Null
-    }
-
-    $AssetName = "docker-$DockerVersion.zip"
-	$Download  = "https://download.docker.com/win/static/stable/x86_64/$AssetName"
-
-	$ZipPath = Get-TlcStagingPath $AssetName
-
-	Write-Host "Downloading Docker $DockerVersion from $Download"
+	$packageRoot = Get-TlcPkgRoot
+	$cliArchivePath = Get-TlcStagingPath "docker-cli-$UpstreamCommit.zip"
+	$cliSourceRoot = Get-TlcStagingPath "docker-cli-$UpstreamCommit"
+	$cliSourceUrl = "https://github.com/docker/cli/archive/$UpstreamCommit.zip"
+	$mobyArchivePath = Get-TlcStagingPath "moby-$MobyCommit.zip"
+	$mobySourceRoot = Get-TlcStagingPath "moby-$MobyCommit"
+	$mobySourceUrl = "https://github.com/moby/moby/archive/$MobyCommit.zip"
+	$outputRoot = Get-TlcStagingPath "docker-build-$PackageVersion"
+	$goToolsRoot = Get-TlcStagingPath "docker-go-tools-$PackageVersion"
+	$dockerBuild = Join-Path $outputRoot 'docker.exe'
+	$dockerdBuild = Join-Path $outputRoot 'dockerd.exe'
+	$locationPushed = $false
+	$previous = @{}
+	foreach ($name in @('CGO_ENABLED', 'GOBIN', 'GO111MODULE', 'GOFLAGS', 'GONOSUMDB', 'GOPATH', 'GOPRIVATE', 'GOPROXY', 'GOSUMDB', 'GOTOOLCHAIN', 'GOWORK', 'PATH')) {
+		$previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+	}
 	try {
-		Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath -ExpectedSha256 $ExpectedSha256
+		foreach ($path in @($cliSourceRoot, $mobySourceRoot, $outputRoot, $goToolsRoot)) {
+			if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+		}
+		New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 
-		if (-not (Test-Path $ZipPath)) {
-			throw "Failed to download Docker archive from $Download"
+		$env:CGO_ENABLED = '0'
+		$env:GO111MODULE = 'on'
+		$env:GOFLAGS = '-mod=vendor'
+		$env:GONOSUMDB = $null
+		$env:GOPRIVATE = $null
+		$env:GOPROXY = 'https://proxy.golang.org,direct'
+		$env:GOSUMDB = 'sum.golang.org'
+		$env:GOTOOLCHAIN = $GoToolchain
+		$env:GOWORK = 'off'
+		$go = Get-TlcApplicationPath -Name 'go'
+
+		Invoke-TlcWebRequest -Uri $cliSourceUrl -OutFile $cliArchivePath -ExpectedSha256 $ExpectedSha256 | Out-Null
+		Expand-Archive -LiteralPath $cliArchivePath -DestinationPath $cliSourceRoot -Force
+		$cliSource = Get-ChildItem -LiteralPath $cliSourceRoot -Directory | Select-Object -First 1
+		if (-not $cliSource) { throw 'Docker CLI source archive did not contain a source directory.' }
+		Copy-Item -LiteralPath (Join-Path $cliSource.FullName 'vendor.mod') -Destination (Join-Path $cliSource.FullName 'go.mod') -Force
+		Copy-Item -LiteralPath (Join-Path $cliSource.FullName 'vendor.sum') -Destination (Join-Path $cliSource.FullName 'go.sum') -Force
+		$cliLdflags = "-s -w -X github.com/docker/cli/cli/version.GitCommit=$UpstreamCommit -X github.com/docker/cli/cli/version.BuildTime=$UpstreamCommitDate -X github.com/docker/cli/cli/version.Version=$UpstreamVersion"
+		Push-Location $cliSource.FullName
+		$locationPushed = $true
+		& $go build -buildvcs=false -trimpath -tags grpcnotrace -ldflags $cliLdflags -o $dockerBuild ./cmd/docker
+		if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $dockerBuild -PathType Leaf)) {
+			throw "Docker CLI source build failed with exit code $LASTEXITCODE."
+		}
+		Pop-Location
+		$locationPushed = $false
+
+		Invoke-TlcWebRequest -Uri $mobySourceUrl -OutFile $mobyArchivePath -ExpectedSha256 $MobyExpectedSha256 | Out-Null
+		Expand-Archive -LiteralPath $mobyArchivePath -DestinationPath $mobySourceRoot -Force
+		$mobySource = Get-ChildItem -LiteralPath $mobySourceRoot -Directory | Select-Object -First 1
+		if (-not $mobySource) { throw 'Moby source archive did not contain a source directory.' }
+
+		New-Item -ItemType Directory -Path $goToolsRoot -Force | Out-Null
+		$env:GOFLAGS = $null
+		$env:GOBIN = $goToolsRoot
+		if (-not $env:GOPATH) {
+			$env:GOPATH = (& $go env GOPATH | Select-Object -First 1).Trim()
+			if ($LASTEXITCODE -ne 0 -or -not $env:GOPATH) { throw 'Could not resolve GOPATH for the Docker resource build.' }
+		}
+		& $go install "github.com/tc-hib/go-winres@$GoWinresVersion"
+		if ($LASTEXITCODE -ne 0) { throw "go-winres $GoWinresVersion installation failed with exit code $LASTEXITCODE." }
+		$goWinres = Join-Path $goToolsRoot 'go-winres.exe'
+		$toolMetadata = (& $go version -m $goWinres | Out-String)
+		if ($LASTEXITCODE -ne 0 -or $toolMetadata -notmatch "(?m)^\s*mod\s+github\.com/tc-hib/go-winres\s+$([regex]::Escape($GoWinresVersion))\s") {
+			throw "go-winres build tool provenance did not resolve to $GoWinresVersion."
+		}
+		$env:PATH = "$goToolsRoot;$($previous['PATH'])"
+		$env:GOFLAGS = '-mod=vendor'
+		Push-Location $mobySource.FullName
+		$locationPushed = $true
+		& .\hack\make\.go-autogen.ps1 -CommitString $MobyCommit -DockerVersion $UpstreamVersion `
+			-Platform 'Docker Engine - Community' -Product 'Docker Engine - Community' `
+			-DefaultProductLicense 'Community Engine' -PackagerName 'Docker, Inc.'
+		if ($LASTEXITCODE -ne 0) { throw "Moby Windows resource generation failed with exit code $LASTEXITCODE." }
+		$daemonLdflags = "-s -w -linkmode=internal -X github.com/moby/moby/v2/dockerversion.Version=$UpstreamVersion -X github.com/moby/moby/v2/dockerversion.GitCommit=$MobyCommit -X github.com/moby/moby/v2/dockerversion.BuildTime=$MobyCommitDate -X 'github.com/moby/moby/v2/dockerversion.PlatformName=Docker Engine - Community' -X 'github.com/moby/moby/v2/dockerversion.ProductName=Docker Engine - Community' -X 'github.com/moby/moby/v2/dockerversion.DefaultProductLicense=Community Engine'"
+		& $go build -buildvcs=false -trimpath -tags daemon -ldflags $daemonLdflags -o $dockerdBuild ./cmd/dockerd
+		if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $dockerdBuild -PathType Leaf)) {
+			throw "Docker daemon source build failed with exit code $LASTEXITCODE."
+		}
+		Pop-Location
+		$locationPushed = $false
+
+		foreach ($binary in @($dockerBuild, $dockerdBuild)) {
+			$buildMetadata = (& $go version -m $binary | Out-String)
+			if ($LASTEXITCODE -ne 0 -or $buildMetadata -notmatch "(?m)^$([regex]::Escape($binary)):\s+$([regex]::Escape($GoToolchain))\s*$") {
+				throw "$([IO.Path]::GetFileName($binary)) was not built with required toolchain $GoToolchain."
+			}
+			$versionText = (& $binary --version | Out-String)
+			if ($LASTEXITCODE -ne 0 -or $versionText -notmatch "Docker version $([regex]::Escape($UpstreamVersion)),") {
+				throw "$([IO.Path]::GetFileName($binary)) did not report Docker $UpstreamVersion."
+			}
 		}
 
-		Expand-Archive -LiteralPath $ZipPath -DestinationPath $InstallRoot -Force
+		New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+		Copy-Item -LiteralPath $dockerBuild -Destination (Get-TlcPkgPath 'docker.exe') -Force
+		Copy-Item -LiteralPath $dockerdBuild -Destination (Get-TlcPkgPath 'dockerd.exe') -Force
 	} finally {
-		Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+		if ($locationPushed) { Pop-Location }
+		foreach ($name in $previous.Keys) {
+			if ($null -eq $previous[$name]) { Remove-Item -LiteralPath "env:$name" -ErrorAction SilentlyContinue }
+			else { Set-Item -LiteralPath "env:$name" -Value $previous[$name] }
+		}
+		foreach ($path in @($cliArchivePath, $mobyArchivePath)) {
+			Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+		}
+		foreach ($path in @($cliSourceRoot, $mobySourceRoot, $outputRoot, $goToolsRoot)) {
+			Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+		}
 	}
 
-    $DockerDir = Join-Path $InstallRoot 'docker'
-    $DockerExe = Join-Path $DockerDir 'docker.exe'
-
-	if (-not (Test-Path $DockerExe)) {
-		throw "docker.exe not found after extracting $AssetName"
-	}
-
-    Write-TlcVars @{
-        env = @{
-            path = $DockerDir
-        }
-    }
-
+	Write-TlcVars @{ env = @{ path = $packageRoot } }
 }
 
 function global:Test-TlcPackageInstall {
-    Toolchain exec (Get-TlcPkgUri) {
-        docker --version
-    }
+	Toolchain exec (Get-TlcPkgUri) {
+		docker --version
+		dockerd --version
+	}
 }
