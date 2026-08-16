@@ -38,6 +38,7 @@
 
 - Treat native build-tool stderr as diagnostic output while using the process exit code as the fail-closed result, preventing successful cold-cache Go builds from being rejected by isolated package runspaces.
 - Preserve `${.}` exactly when a custom local package root ends in `pkg`, instead of re-expanding the already resolved path through the legacy `\pkg` compatibility rule.
+- Make platform-alias publication compatible with older Docker Buildx clients and safely repair missing aliases from reverified immutable package evidence.
 - Use the platform-specific `kubectl-linux` package in Linux compatibility and post-publication certification, and reject runner-provided binaries that resolve outside Toolchain's digest-addressed content store.
 - Make `toolchain-consumer.json` the sole Toolchain pin, prevent promotion bots from modifying workflow files, validate promotions inside the initiating workflow, and merge them automatically only after all consumer gates pass.
 - Select the newest durable image during scheduled vulnerability rescans and require explicit 1-90 day retention on every workflow artifact.

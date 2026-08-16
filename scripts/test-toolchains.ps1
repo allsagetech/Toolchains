@@ -312,6 +312,7 @@ function Test-ProductionReadinessPolicies {
 
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
+	$cosignEvidenceText = Get-Content -LiteralPath .\.github\scripts\Test-CosignEvidence.ps1 -Raw
 	$certificationWorkflowText = Get-Content -LiteralPath .\.github\workflows\certify-published.yml -Raw
 	$promotionWorkflowText = Get-Content -LiteralPath .\.github\workflows\sync-contract.yml -Raw
 	$consumerWorkflowText = Get-Content -LiteralPath .\.github\workflows\consumer-compatibility.yml -Raw
@@ -493,15 +494,21 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($workflowText -notmatch '\(\$tier -eq ''model-large'' -and') 'Large-model jobs can still enter the protected release matrix.'
 	Assert-True ($workflowText -notmatch "toolchains-large") 'Release workflow still queues work on the disabled large-model runner.'
 	Assert-True ($workflowText -match 'release:[\s\S]+max-parallel:\s+8') 'Release publication does not preserve runner capacity with bounded parallelism.'
-	Assert-True ($workflowText -match 'function Invoke-CosignVerification') 'Cosign verification has no bounded retry wrapper.'
-	Assert-True ($workflowText -match "@\('--offline', '--timeout', '30s'") 'Cosign verification does not use the signed transparency bundle with a bounded internal timeout.'
+	Assert-True ($workflowText -match 'Test-CosignEvidence\.ps1') 'Publication does not use the shared fail-closed Cosign evidence verifier.'
+	Assert-True ($cosignEvidenceText -match 'function Invoke-CosignVerification') 'Cosign verification has no bounded retry wrapper.'
+	Assert-True ($cosignEvidenceText -match "'--offline', '--timeout', '30s'") 'Cosign verification does not use the signed transparency bundle with a bounded internal timeout.'
 	Assert-True ($workflowText -match 'Verify signature and attestations fail closed[\s\S]+timeout-minutes:\s+6') 'Cosign verification step has no GitHub-enforced deadline.'
-	Assert-True ($workflowText -match 'Redirected Process streams can keep a[\s\S]+Windows child attached indefinitely') 'Cosign verification does not document why child-process output must remain inherited.'
-	Assert-True ($workflowText -notmatch 'RedirectStandardOutput|RedirectStandardError|-RedirectStandardOutput|-RedirectStandardError') 'Cosign verification still redirects child-process output and can deadlock the Windows runner.'
-	Assert-True ($workflowText -notmatch 'ReadToEndAsync|GetAwaiter\(\)\.GetResult\(\)') 'Cosign verification can still hang while draining a terminated child process.'
-	Assert-True ($workflowText -match '\$process\.WaitForExit\(\$TimeoutSeconds \* 1000\)') 'Cosign verification has no external hard timeout.'
-	Assert-True ($workflowText -match '\$process\.Kill\(\)' -and $workflowText -match '\$process\.WaitForExit\(5000\)') 'Cosign verification does not terminate and reap a timed-out process.'
-	Assert-True ($workflowText -notmatch '\$process\.Kill\(\$true\)') 'Cosign verification still uses blocking process-tree enumeration on timeout.'
+	Assert-True ($cosignEvidenceText -match 'Redirected Process streams can keep a[\s\S]+Windows child attached indefinitely') 'Cosign verification does not document why child-process output must remain inherited.'
+	Assert-True ($cosignEvidenceText -notmatch 'RedirectStandardOutput|RedirectStandardError|-RedirectStandardOutput|-RedirectStandardError') 'Cosign verification still redirects child-process output and can deadlock the Windows runner.'
+	Assert-True ($cosignEvidenceText -notmatch 'ReadToEndAsync|GetAwaiter\(\)\.GetResult\(\)') 'Cosign verification can still hang while draining a terminated child process.'
+	Assert-True ($cosignEvidenceText -match '\$process\.WaitForExit\(\$TimeoutSeconds \* 1000\)') 'Cosign verification has no external hard timeout.'
+	Assert-True ($cosignEvidenceText -match '\$process\.Kill\(\)' -and $cosignEvidenceText -match '\$process\.WaitForExit\(5000\)') 'Cosign verification does not terminate and reap a timed-out process.'
+	Assert-True ($cosignEvidenceText -notmatch '\$process\.Kill\(\$true\)') 'Cosign verification still uses blocking process-tree enumeration on timeout.'
+	Assert-True ($workflowText -match 'Publish platform leaf alias[\s\S]+if: steps\.pkg\.outputs\.canonical-name != '''' && steps\.pkg\.outputs\.platform != ''''[\s\S]+Test-CosignEvidence\.ps1') 'An already-current package cannot safely repair a missing verified platform alias.'
+	Assert-True ($workflowText -match 'imagetools'', ''create''[\s\S]+imagetools create --help|\$helpArguments = @\(\$createArguments \+ ''--help''\)') 'Platform alias publication does not inspect Docker Buildx capabilities.'
+	Assert-True ($workflowText -match 'if \(\$imagetoolsHelp -match [\s\S]+\$createArguments \+= ''--prefer-index=false''[\s\S]+& docker @createArguments') 'Platform alias publication does not conditionally use --prefer-index with a compatible fallback.'
+	Assert-True ($workflowText -notmatch 'docker buildx imagetools create --prefer-index=false') 'Platform alias publication still unconditionally requires a newer Docker Buildx client.'
+	Assert-True ($workflowText -match 'platform leaf alias digest differs from its signed package digest[\s\S]+compatible platform leaf index does not contain its signed package digest') 'Platform alias publication does not verify its exact signed digest or compatible wrapper index.'
 	Assert-True (([regex]::Matches($workflowText, 'GH_TOKEN:\s+\$\{\{ github\.token \}\}')).Count -ge 4) 'Parallel build jobs do not authenticate GitHub API requests.'
 	Assert-True ($workflowText -match 'RUNNER_OS -eq ''Linux''[\s\S]+Get-ChildItem -LiteralPath \$full -Force \| Remove-Item') 'Linux package cleanup still removes the protected mount root.'
 	Assert-True ($workflowText -match 'scanner-smoke:') 'Publication does not validate scanner bootstrap before starting the package matrix.'

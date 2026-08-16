@@ -856,7 +856,7 @@ jobs:
           $predicate | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json' -Encoding utf8
 
       - name: Login to Docker Hub
-        if: steps.pkg.outputs.up-to-date == 'False'
+        if: steps.pkg.outputs.up-to-date == 'False' || (steps.pkg.outputs.canonical-name != '' && steps.pkg.outputs.platform != '')
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -864,7 +864,7 @@ jobs:
           logout: true
 
       - name: Install verified Cosign
-        if: steps.pkg.outputs.up-to-date == 'False'
+        if: steps.pkg.outputs.up-to-date == 'False' || (steps.pkg.outputs.canonical-name != '' && steps.pkg.outputs.platform != '')
         shell: pwsh
         run: .\.github\scripts\Install-VerifiedCosign.ps1
 
@@ -928,66 +928,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $identity = "https://github.com/$env:GITHUB_WORKFLOW_REF"
           $issuer = 'https://token.actions.githubusercontent.com'
-
-          function Invoke-CosignVerification {
-            param(
-              [Parameter(Mandatory=$true)][string]$Description,
-              [Parameter(Mandatory=$true)][string[]]$Arguments,
-              [int]$MaxAttempts = 2,
-              [int]$TimeoutSeconds = 45
-            )
-
-            $cosign = Get-Command cosign -ErrorAction Stop
-            for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-              Write-Host "$Description (attempt $attempt/$MaxAttempts)"
-              $startInfo = [Diagnostics.ProcessStartInfo]::new()
-              $startInfo.FileName = $cosign.Source
-              $startInfo.UseShellExecute = $false
-              $startInfo.CreateNoWindow = $true
-              foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
-
-              # Inherit the runner's output handles. Redirected Process streams can keep a
-              # terminated Windows child attached indefinitely and defeat every outer timeout.
-              $process = [Diagnostics.Process]::new()
-              $process.StartInfo = $startInfo
-              try {
-                if (-not $process.Start()) { throw "could not start $($cosign.Source)" }
-                $finished = $process.WaitForExit($TimeoutSeconds * 1000)
-                if (-not $finished) {
-                  try { $process.Kill() } catch { }
-                  if (-not $process.WaitForExit(5000)) {
-                    throw "$Description could not terminate its timed-out process."
-                  }
-                }
-
-                if (-not $finished) {
-                  $reason = "timed out after $TimeoutSeconds seconds"
-                } elseif ($process.ExitCode -eq 0) {
-                  return
-                } else {
-                  $reason = "failed with exit code $($process.ExitCode)"
-                }
-              } finally {
-                $process.Dispose()
-              }
-
-              if ($attempt -lt $MaxAttempts) {
-                $delay = [math]::Pow(2, $attempt)
-                Write-Warning "$Description $reason; retrying in $delay seconds."
-                Start-Sleep -Seconds $delay
-              }
-            }
-
-            throw "$Description $reason after $MaxAttempts attempts."
-          }
-
-          # Cosign's signed bundle contains the Rekor inclusion proof. Offline mode still
-          # verifies that proof, the Fulcio certificate, claims, issuer, and workflow identity
-          # without making a second live transparency-log request after signing.
-          $identityArguments = @('--offline', '--timeout', '30s', '--certificate-identity', $identity, '--certificate-oidc-issuer', $issuer)
-          Invoke-CosignVerification -Description 'Published signature verification' -Arguments (@('verify') + $identityArguments + $env:DIGEST_REF)
-          Invoke-CosignVerification -Description 'Published SBOM attestation verification' -Arguments (@('verify-attestation', '--type', 'spdxjson') + $identityArguments + $env:DIGEST_REF)
-          Invoke-CosignVerification -Description 'Published provenance attestation verification' -Arguments (@('verify-attestation', '--type', 'slsaprovenance') + $identityArguments + $env:DIGEST_REF)
+          ./.github/scripts/Test-CosignEvidence.ps1 `
+            -DigestRef $env:DIGEST_REF `
+            -CertificateIdentity $identity `
+            -CertificateOidcIssuer $issuer
 
       - name: Promote signed digest to immutable version tag without rebuilding
         if: steps.pkg.outputs.up-to-date == 'False'
@@ -1033,20 +977,58 @@ jobs:
             -Tag $env:STAGING_TAG_NAME
 
       - name: Publish platform leaf alias
-        if: steps.pkg.outputs.up-to-date == 'False' && steps.pkg.outputs.canonical-name != '' && steps.pkg.outputs.platform != ''
+        if: steps.pkg.outputs.canonical-name != '' && steps.pkg.outputs.platform != ''
         shell: pwsh
+        timeout-minutes: 6
         env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
           CANONICAL_NAME: ${{ steps.pkg.outputs.canonical-name }}
           PLATFORM: ${{ steps.pkg.outputs.platform }}
           VERSION: ${{ steps.pkg.outputs.version }}
-          DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
+          PUBLISHED_DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           $ErrorActionPreference = 'Stop'
           $safeVersion = $env:VERSION.Replace('+', '_')
           $platformSlug = $env:PLATFORM.Replace('/', '-')
           $leafTag = "$env:TLC_DOCKER_REPO`:tlc-platform-v1-$platformSlug--$env:CANONICAL_NAME--$safeVersion"
-          docker buildx imagetools create --prefer-index=false --tag $leafTag $env:DIGEST_REF
+          $immutableTag = "$env:TLC_DOCKER_REPO`:$env:PACKAGE_NAME-$safeVersion"
+          $manifest = (& docker buildx imagetools inspect $immutableTag --format '{{json .Manifest}}' | Out-String).Trim() | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "could not inspect immutable package tag $immutableTag" }
+          $sourceDigest = [string]$manifest.digest
+          if ($sourceDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw "invalid digest for immutable package tag $immutableTag" }
+          if ($env:PUBLISHED_DIGEST -and $sourceDigest -cne $env:PUBLISHED_DIGEST) {
+            throw "immutable package tag digest changed before platform alias publication"
+          }
+          $digestRef = "$env:TLC_DOCKER_REPO@$sourceDigest"
+          ./.github/scripts/Test-CosignEvidence.ps1 `
+            -DigestRef $digestRef `
+            -CertificateIdentity "https://github.com/$env:GITHUB_WORKFLOW_REF" `
+            -CertificateOidcIssuer 'https://token.actions.githubusercontent.com'
+
+          $createArguments = @('buildx', 'imagetools', 'create')
+          $helpArguments = @($createArguments + '--help')
+          $imagetoolsHelp = (& docker @helpArguments 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw 'could not inspect Docker Buildx imagetools capabilities' }
+          if ($imagetoolsHelp -match '(?m)^\s*--prefer-index(?:[=\s]|$)') {
+            $createArguments += '--prefer-index=false'
+          } else {
+            Write-Host 'Docker Buildx does not support --prefer-index; using its compatible create behavior.'
+          }
+          $createArguments += @('--tag', $leafTag, $digestRef)
+          & docker @createArguments
           if ($LASTEXITCODE -ne 0) { throw "failed to publish platform leaf alias $leafTag" }
+          $leafManifest = (& docker buildx imagetools inspect $leafTag --format '{{json .Manifest}}' | Out-String).Trim() | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "could not verify platform leaf alias $leafTag" }
+          $leafDigest = [string]$leafManifest.digest
+          if ($leafDigest -cne $sourceDigest) {
+            if ($imagetoolsHelp -match '(?m)^\s*--prefer-index(?:[=\s]|$)') {
+              throw 'platform leaf alias digest differs from its signed package digest'
+            }
+            $leafDocument = (& docker buildx imagetools inspect $leafTag --raw | Out-String).Trim() | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or @($leafDocument.manifests.digest) -notcontains $sourceDigest) {
+              throw 'compatible platform leaf index does not contain its signed package digest'
+            }
+          }
 
       - name: Upload release evidence
         if: always() && steps.pkg.outputs.up-to-date == 'False'
