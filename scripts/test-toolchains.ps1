@@ -661,6 +661,18 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($regctlText -match "PatchedCryptoVersion = 'v0\.52\.0'") 'Regctl does not require the fixed golang.org/x/crypto version.'
 	Assert-True ($regctlText -match "@\('regctl', 'regbot', 'regsync'\)") 'Regctl does not rebuild every packaged command.'
 	Assert-True ($regctlText -match 'BuildRevision = 1') 'Regctl patched source build does not carry a republishable package revision.'
+	$taskText = Get-Content -LiteralPath .\src\pkgs\task.ps1 -Raw
+	Assert-True ($taskText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Task still packages the vulnerable upstream binary archive.'
+	Assert-True ($taskText -match "GoToolchain = 'go1\.26\.6'") 'Task does not pin the fixed Go toolchain.'
+	foreach ($patchedModule in @(
+		@{ Property = 'PatchedCryptoVersion'; Version = 'v0.53.0' },
+		@{ Property = 'PatchedNetVersion'; Version = 'v0.56.0' },
+		@{ Property = 'PatchedTextVersion'; Version = 'v0.39.0' },
+		@{ Property = 'PatchedGrpcVersion'; Version = 'v1.82.1' }
+	)) {
+		Assert-True ($taskText -match "$($patchedModule.Property) = '$([regex]::Escape($patchedModule.Version))'") "Task does not pin $($patchedModule.Property) to $($patchedModule.Version)."
+	}
+	Assert-True ($taskText -match 'BuildRevision = 1') 'Task patched source build does not carry a republishable package revision.'
 	foreach ($kubectlScript in @('.\src\pkgs\kubectl.ps1', '.\src\pkgs\kubectl-linux.ps1')) {
 		$kubectlText = Get-Content -LiteralPath $kubectlScript -Raw
 		Assert-True ($kubectlText -match 'Initialize-TlcKubectlPackage') "$kubectlScript bypasses the shared verified source build."
