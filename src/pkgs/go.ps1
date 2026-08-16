@@ -32,9 +32,17 @@ function global:Install-TlcPackage {
 		ExpectedSha256 = [string]$goFile.sha256
 	}
 	Install-BuildTool @Params
+	$goBinary = Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'go.exe' | Select-Object -First 1
+	if (-not $goBinary) { throw 'Go archive did not contain go.exe.' }
+	$goRoot = Split-Path -Parent $goBinary.DirectoryName
+	$testPrivateKey = Join-Path $goRoot 'src/crypto/x509/platform_root_key.pem'
+	if (Test-Path -LiteralPath $testPrivateKey -PathType Leaf) {
+		Remove-Item -LiteralPath $testPrivateKey -Force
+	}
+	if (Test-Path -LiteralPath $testPrivateKey) { throw 'Go crypto/x509 test private key remained in the package payload.' }
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'go.exe' | Select-Object -First 1).DirectoryName
+			path = $goBinary.DirectoryName
 		}
 	}
 }

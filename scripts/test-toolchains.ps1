@@ -577,6 +577,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($cosignInstallerText -match 'ea5c65f99425d6cfbb5c4b5de5dac035f14d09131c1a0ea7c7fc32eab39364f9') 'Cosign Linux asset digest is not pinned.'
 	Assert-True ($cosignInstallerText -match "'User-Agent'") 'Cosign bootstrap does not send an explicit browser User-Agent.'
 	$familyText = Get-Content -LiteralPath .\src\package-families.ps1 -Raw
+	$goPackageText = Get-Content -LiteralPath .\src\pkgs\go.ps1 -Raw
+	Assert-True ($goPackageText -match 'platform_root_key\.pem' -and $goPackageText -match 'Remove-Item -LiteralPath \$testPrivateKey') 'Go packages retain a bundled crypto/x509 test private key that blocks secret scanning.'
 	Assert-True ($familyText -match 'Not Found\|no upstream hash') 'Shared Adoptium package logic does not skip unavailable optional x86 assets under strict verification.'
 	foreach ($patchedModule in @(
 		@{ Module = 'golang.org/x/net'; Version = 'v0.56.0' },
