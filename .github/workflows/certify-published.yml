@@ -16,10 +16,6 @@ concurrency:
   group: toolchains-published-certification
   cancel-in-progress: false
 
-env:
-  TOOLCHAIN_REPO: allsagetech/toolchain
-  TOOLCHAIN_REF: 9ee35a2f6ee5d5c0ffd08542030c20e5033d7279
-
 jobs:
   package-contract:
     name: Consumer (${{ matrix.name }})

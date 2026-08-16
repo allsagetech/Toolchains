@@ -125,7 +125,7 @@ pwsh -NoLogo -NoProfile -File ./scripts/test.ps1
 
 For the dependency-free legacy validation path (including Windows PowerShell 5.1), run `./scripts/test-toolchains.ps1`.
 
-Package authors must follow the lifecycle, checksum, package-root, and configuration rules in [`doc/package-authoring.md`](doc/package-authoring.md). The immutable build/scan/contract/sign/promotion sequence is documented in [`doc/release-process.md`](doc/release-process.md), and self-hosted runners should follow [`doc/cache-migration.md`](doc/cache-migration.md).
+Package authors must follow the lifecycle, checksum, package-root, and configuration rules in [`doc/package-authoring.md`](doc/package-authoring.md). The immutable build/scan/contract/sign/promotion sequence is documented in [`doc/release-process.md`](doc/release-process.md), evidence lifetimes in [`doc/retention-policy.md`](doc/retention-policy.md), and self-hosted runners should follow [`doc/cache-migration.md`](doc/cache-migration.md).
 
 The repository and workflow boundaries are summarized in [`doc/architecture.md`](doc/architecture.md). Every publication run uploads `package-health.json` and writes a per-package Actions summary so scanner infrastructure failures, vulnerability findings, and package lifecycle failures can be distinguished without opening every matrix job.
 
@@ -136,6 +136,13 @@ publish-eligible descriptor and can mark packages `scan-blocked` without
 weakening the original immutable release evidence. A separate certification
 workflow exercises clean Windows PowerShell 5.1, Windows PowerShell 7, Linux
 PowerShell 7, and scheduled local-cluster smoke tests.
+
+The package-health monitor runs daily and after every scheduled rescan. It reads
+the catalog through Toolchain's Cosign-verifying path, rejects live-registry
+fallbacks, non-available packages, missing durable versions, and scan evidence
+older than eight days. It retains a machine-readable report for 90 days and
+opens or updates a single `[monitor] Package health alert` issue until a healthy
+run closes it automatically.
 
 The catalog additionally contains Windows/Linux packages for Cosign, ORAS,
 Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal. Shared
@@ -185,13 +192,15 @@ the release's official `SHASUMS256.txt` when installed through
 `Install-BuildTool`.
 
 Workflow matrix entries expose `verified_downloads`, `publish_eligible`, and a
-`quarantine_reason`. Packages without independent publisher provenance must set
+`quarantine_reason`. Packages without independent provenance must set
 `VerifiedDownloads = $false` and a reason; packages blocked for a separate
 security or lifecycle concern set `PublishEligible = $false` and a publication
 block reason. Both are excluded before production builds begin. Docker, NASM,
-and zstd are currently provenance-quarantined, while Node 22 and Node 24 are
-temporarily security-quarantined until their upstream archives contain patched
-npm bundles.
+and zstd use version-pinned SHA-256 values independently reviewed through
+Microsoft's WinGet manifest history while downloading only from their official
+publisher origins. Node 22 and Node 24 use Node's official checksum documents;
+their current security releases pass through the same fail-closed Trivy gate as
+every other publishable package, without vulnerability exceptions.
 The scheduled Docker Hub maintenance job removes tags selected by quarantined
 descriptors and deletes their Cosign attachments only when no durable tag still
 references the same digest. Manual cleanup runs default to a non-destructive preview.

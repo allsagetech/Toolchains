@@ -1,0 +1,70 @@
+# Toolchains | SPDX-License-Identifier: MPL-2.0
+name: Roll Back Package Alias
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package name whose mutable alias will move
+        required: true
+        type: string
+      version:
+        description: Previously published immutable version
+        required: true
+        type: string
+      alias_tag:
+        description: Mutable package alias (package-latest or package-stable)
+        required: true
+        type: string
+      expected_digest:
+        description: Expected sha256 digest of the immutable version tag
+        required: true
+        type: string
+      confirmation:
+        description: Type ROLLBACK to authorize the alias move
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchains-package-publication
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Verify and move alias
+    if: ${{ inputs.confirmation == 'ROLLBACK' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: package-release
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: true
+      - name: Install verified Cosign
+        shell: pwsh
+        run: ./.github/scripts/Install-VerifiedCosign.ps1
+      - name: Verify immutable evidence and move mutable alias
+        shell: pwsh
+        env:
+          PACKAGE: ${{ inputs.package }}
+          VERSION: ${{ inputs.version }}
+          ALIAS_TAG: ${{ inputs.alias_tag }}
+          EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+        run: |
+          ./scripts/rollback-package-tag.ps1 `
+            -Repository '${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}' `
+            -Package $env:PACKAGE `
+            -Version $env:VERSION `
+            -AliasTag $env:ALIAS_TAG `
+            -ExpectedDigest $env:EXPECTED_DIGEST `
+            -Confirm:$false | Format-List

@@ -1,0 +1,100 @@
+# Toolchains | SPDX-License-Identifier: MPL-2.0
+name: Monitor Package Health
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+  workflow_run:
+    workflows: ['Rescan Published Packages']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: toolchains-package-health-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    name: Verify catalog and alert
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Toolchain consumer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/install-toolchain.ps1
+
+      - name: Read Cosign-verified health catalog
+        id: fetch
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          try {
+            $json = tlc remote health -Refresh -Json
+            [IO.File]::WriteAllText((Join-Path (Get-Location) 'evidence/health.json'), ([string]$json), [Text.UTF8Encoding]::new($false))
+          } catch {
+            '[]' | Set-Content -LiteralPath evidence/health.json -Encoding utf8
+            [string]$_.Exception.Message | Set-Content -LiteralPath evidence/fetch-error.txt -Encoding utf8
+          }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run' -and '${{ github.event.workflow_run.conclusion }}' -ne 'success') {
+            "The rescan workflow concluded ${{ github.event.workflow_run.conclusion }}." | Add-Content -LiteralPath evidence/fetch-error.txt
+          }
+
+      - name: Evaluate package health
+        id: evaluate
+        shell: pwsh
+        run: |
+          $params = @{
+            InputPath = 'evidence/health.json'
+            JsonOutputPath = 'evidence/report.json'
+            MarkdownOutputPath = 'evidence/report.md'
+            MaxScanAgeHours = 192
+          }
+          if (Test-Path -LiteralPath evidence/fetch-error.txt) { $params.SourceErrorPath = 'evidence/fetch-error.txt' }
+          $report = ./scripts/test-package-health-monitor.ps1 @params
+          "healthy=$([string]$report.healthy).ToLowerInvariant()" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Get-Content -LiteralPath evidence/report.md | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Open, update, or close package health alert
+        if: always() && steps.evaluate.outcome == 'success'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEALTHY: ${{ steps.evaluate.outputs.healthy }}
+        run: |
+          $title = '[monitor] Package health alert'
+          $issues = @(gh issue list --state open --limit 100 --json number,title | ConvertFrom-Json | Where-Object title -eq $title)
+          if ($env:HEALTHY -eq 'true') {
+            foreach ($issue in $issues) {
+              gh issue close $issue.number --comment 'The signed package health catalog and all scan-freshness checks have recovered.'
+            }
+          } elseif ($issues.Count -gt 0) {
+            gh issue edit $issues[0].number --body-file evidence/report.md
+          } else {
+            gh issue create --title $title --body-file evidence/report.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not synchronize the package health alert issue.' }
+
+      - name: Upload monitoring evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-health-monitor-${{ github.run_attempt }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce healthy catalog
+        if: ${{ steps.evaluate.outputs.healthy != 'true' }}
+        shell: pwsh
+        run: throw 'Signed package health monitoring reported one or more problems.'

@@ -22,7 +22,7 @@ foreach ($descriptor in Read-TlcPackageDescriptors -Path $packagePaths) {
 				$versionText = $Matches[1].Replace('_', '+')
 				try { [pscustomobject]@{ Tag = $tag; Version = [TlcSemanticVersion]::new($versionText) } } catch { Write-Debug "Skipping invalid package tag '$tag': $($_.Exception.Message)" }
 			}
-		} | Where-Object { $_ } | Sort-Object Version)
+		} | Where-Object { $_ } | Sort-Object Version -Descending)
 		if ($candidates.Count -eq 0) { continue }
 		$latest = $candidates[0]
 		$entries += [ordered]@{

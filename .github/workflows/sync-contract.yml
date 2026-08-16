@@ -9,8 +9,13 @@ on:
   repository_dispatch:
     types: [toolchain-released]
   schedule:
-    - cron: '31 6 * * 1'
+    - cron: '31 */6 * * *'
   workflow_dispatch:
+    inputs:
+      version:
+        description: Optional released Toolchain version to promote or roll back to
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -21,9 +26,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync:
+  prepare:
+    name: Prepare promotion
     runs-on: ubuntu-22.04
     timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.pr.outputs.changed }}
+      branch: ${{ steps.pr.outputs.branch }}
+      pr-url: ${{ steps.pr.outputs.pr-url }}
     steps:
       - name: Checkout Toolchains
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,12 +48,20 @@ jobs:
           DISPATCH_REF: ${{ github.event.client_payload.ref }}
           DISPATCH_VERSION: ${{ github.event.client_payload.version }}
           DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_EVENT_NAME -eq 'repository_dispatch') {
             $ref = [string]$env:DISPATCH_REF
             $version = ([string]$env:DISPATCH_VERSION).TrimStart('v')
             $tag = [string]$env:DISPATCH_TAG
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($env:REQUESTED_VERSION)) {
+            $version = ([string]$env:REQUESTED_VERSION).Trim().TrimStart('v')
+            if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?$') { throw 'Requested Toolchain rollback version is invalid.' }
+            $tag = "v$version"
+            $release = gh release view $tag --repo allsagetech/Toolchain --json tagName,isDraft | ConvertFrom-Json
+            if ([bool]$release.isDraft -or [string]$release.tagName -ne $tag) { throw "Toolchain release $tag is not published." }
+            $ref = (gh api "repos/allsagetech/Toolchain/commits/$tag" --jq .sha | Out-String).Trim()
           } else {
             $release = gh release view --repo allsagetech/Toolchain --json tagName | ConvertFrom-Json
             $tag = [string]$release.tagName
@@ -85,6 +103,7 @@ jobs:
         run: ./scripts/test.ps1 -CoverageTarget 0
 
       - name: Open promotion pull request
+        id: pr
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,18 +113,100 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if (-not (git status --porcelain)) {
             Write-Host 'The Toolchain consumer and package contract are current.'
+            'changed=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
             return
           }
           $branch = "automation/toolchain-v$env:TOOLCHAIN_VERSION"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -B $branch
-          git add -- toolchain-consumer.json schema .github/workflows/build-push.yml .github/workflows/certify-published.yml
+          git add -- toolchain-consumer.json schema
           git commit -m "Promote Toolchain v$env:TOOLCHAIN_VERSION consumer"
           git push --force-with-lease --set-upstream origin $branch
           $existing = gh pr list --head $branch --state open --json url --jq '.[0].url'
           if ($existing) {
             Write-Host "Updated existing promotion PR: $existing"
+            $prUrl = $existing
           } else {
-            gh pr create --base main --head $branch --title "Promote Toolchain v$env:TOOLCHAIN_VERSION consumer" --body "Promotes immutable Toolchain commit $env:TOOLCHAIN_REF and synchronizes its released package-definition contract. The pull request must pass PowerShell 5.1, PowerShell 7, and Linux consumer tests before merge."
+            $prUrl = (gh pr create --base main --head $branch --title "Promote Toolchain v$env:TOOLCHAIN_VERSION consumer" --body "Promotes immutable Toolchain commit $env:TOOLCHAIN_REF and synchronizes its released package-definition contract. This workflow merges the pull request only after real PowerShell 5.1, PowerShell 7, and Linux consumer tests pass." | Out-String).Trim()
           }
+          if ($LASTEXITCODE -ne 0 -or $prUrl -notmatch '^https://github\.com/') { throw 'Could not create or resolve the promotion pull request.' }
+          'changed=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "pr-url=$prUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  consumer:
+    name: Consumer (${{ matrix.name }})
+    needs: prepare
+    if: ${{ needs.prepare.outputs.changed == 'true' }}
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-powershell-5.1
+            os: windows-2022
+            shell: powershell
+            package: 7-zip:latest
+            command: 7z
+          - name: windows-powershell-7
+            os: windows-2022
+            shell: pwsh
+            package: 7-zip:latest
+            command: 7z
+          - name: linux-powershell-7
+            os: ubuntu-22.04
+            shell: pwsh
+            package: kubectl-linux:latest
+            command: kubectl
+    steps:
+      - name: Checkout promotion candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.branch }}
+          persist-credentials: false
+
+      - name: Install promoted consumer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/install-toolchain.ps1
+
+      - name: Pull, load, and inspect package under PowerShell 7
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        env:
+          CONSUMER_PACKAGE: ${{ matrix.package }}
+          CONSUMER_COMMAND: ${{ matrix.command }}
+        run: ./scripts/test-toolchain-consumer.ps1 -Package $env:CONSUMER_PACKAGE -Command $env:CONSUMER_COMMAND
+
+      - name: Pull, load, and inspect package under Windows PowerShell 5.1
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        env:
+          CONSUMER_PACKAGE: ${{ matrix.package }}
+          CONSUMER_COMMAND: ${{ matrix.command }}
+        run: ./scripts/test-toolchain-consumer.ps1 -Package $env:CONSUMER_PACKAGE -Command $env:CONSUMER_COMMAND
+
+  merge:
+    name: Merge verified promotion
+    needs: [prepare, consumer]
+    if: ${{ needs.prepare.outputs.changed == 'true' && needs.consumer.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge verified promotion pull request
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_PR: ${{ needs.prepare.outputs.pr-url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh pr merge $env:PROMOTION_PR --squash --delete-branch
+          if ($LASTEXITCODE -ne 0) { throw "Could not merge verified promotion pull request $env:PROMOTION_PR." }

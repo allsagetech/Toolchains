@@ -315,23 +315,41 @@ function Test-ProductionReadinessPolicies {
 	$certificationWorkflowText = Get-Content -LiteralPath .\.github\workflows\certify-published.yml -Raw
 	$promotionWorkflowText = Get-Content -LiteralPath .\.github\workflows\sync-contract.yml -Raw
 	$consumerWorkflowText = Get-Content -LiteralPath .\.github\workflows\consumer-compatibility.yml -Raw
+	$monitorWorkflowText = Get-Content -LiteralPath .\.github\workflows\monitor-package-health.yml -Raw
+	$rollbackWorkflowText = Get-Content -LiteralPath .\.github\workflows\rollback-package.yml -Raw
+	$rollbackScriptText = Get-Content -LiteralPath .\scripts\rollback-package-tag.ps1 -Raw
+	$rescanPlanText = Get-Content -LiteralPath .\scripts\export-rescan-matrix.ps1 -Raw
 	$consumer = Get-Content -LiteralPath .\toolchain-consumer.json -Raw | ConvertFrom-Json
 	$runtimeText = Get-Content -LiteralPath .\src\package-runtime.ps1 -Raw
-	$workflowRef = [regex]::Match($workflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
-	$certificationRef = [regex]::Match($certificationWorkflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
-	Assert-True $workflowRef.Success 'Package workflow does not pin Toolchain to an immutable commit.'
-	Assert-True $certificationRef.Success 'Certification workflow does not pin Toolchain to an immutable commit.'
 	Assert-True ([int]$consumer.schemaVersion -eq 1) 'Toolchain consumer manifest has an unsupported schema.'
 	Assert-True ([string]$consumer.ref -match '^[0-9a-f]{40}$') 'Toolchain consumer manifest does not pin an immutable commit.'
-	Assert-True ([string]$consumer.ref -eq $workflowRef.Groups[1].Value) 'Package workflow pin does not match toolchain-consumer.json.'
-	Assert-True ([string]$consumer.ref -eq $certificationRef.Groups[1].Value) 'Certification workflow pin does not match toolchain-consumer.json.'
 	Assert-True ($installerText -match 'toolchain-consumer\.json') 'Toolchain installer does not read the promoted consumer manifest.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
 	Assert-True ($installerText -notmatch '"PSModulePath=\$\(\$env:PSModulePath\)"\s*\|\s*Out-File') 'Toolchain installer exports one PowerShell edition''s module path into later consumer shells.'
 	Assert-True ($workflowText -notmatch 'ref:\s*f6088e16872964cc8b5f4618a8e1bc0596822e32') 'Package contracts still use the legacy Toolchain 2.0.11 source pin.'
-	Assert-True ($workflowText -match 'repository:\s*allsagetech/toolchain\s+ref:\s*\$\{\{ env\.TOOLCHAIN_REF \}\}') 'Package contract source does not use the promoted Toolchain consumer ref.'
+	Assert-True ($workflowText -notmatch '(?m)^\s*TOOLCHAIN_REF:\s*[0-9a-f]{40}\s*$') 'Package workflow duplicates the Toolchain consumer pin.'
+	Assert-True ($certificationWorkflowText -notmatch '(?m)^\s*TOOLCHAIN_REF:\s*[0-9a-f]{40}\s*$') 'Certification workflow duplicates the Toolchain consumer pin.'
+	Assert-True ($workflowText -match 'toolchain-consumer\.json') 'Package workflow does not resolve the promoted consumer manifest.'
+	Assert-True ($workflowText -match 'ref:\s*\$\{\{ needs\.init\.outputs\.toolchain-ref \}\}') 'Package contract source does not use the manifest-derived immutable Toolchain ref.'
 	Assert-True ($promotionWorkflowText -match 'update-toolchain-consumer\.ps1') 'Toolchain release synchronization does not update the consumer pin.'
 	Assert-True ($promotionWorkflowText -match 'repository_dispatch:\s+types:\s*\[toolchain-released\]') 'Toolchain releases cannot trigger consumer promotion.'
+	Assert-True ($promotionWorkflowText -match 'git add -- toolchain-consumer\.json schema') 'Toolchain promotion is not limited to ordinary content files.'
+	Assert-True ($promotionWorkflowText -notmatch 'git add[^\r\n]+\.github/workflows') 'Toolchain promotion still attempts to modify workflow files.'
+	Assert-True ($promotionWorkflowText -match 'gh pr merge[^\r\n]+--squash') 'Verified Toolchain promotions are not merged automatically.'
+	Assert-True ($promotionWorkflowText -match 'REQUESTED_VERSION') 'Toolchain consumer rollback cannot select an older immutable release.'
+	Assert-True ($monitorWorkflowText -match 'tlc remote health -Refresh -Json') 'Health monitoring does not use Toolchain''s signed-catalog verification path.'
+	Assert-True ($monitorWorkflowText -match 'gh issue (create|edit)') 'Health monitoring does not synchronize an alert issue.'
+	Assert-True ($monitorWorkflowText -match 'retention-days:\s*90') 'Health monitoring evidence is not retained for 90 days.'
+	Assert-True ($rollbackWorkflowText -match "confirmation == 'ROLLBACK'") 'Package rollback lacks explicit operator confirmation.'
+	foreach ($evidence in @("cosign @Arguments", "'spdxjson'", "'slsaprovenance'", 'imagetools create', 'AliasTag must be')) {
+		Assert-True ($rollbackScriptText -match [regex]::Escape($evidence)) "Package rollback is missing evidence gate: $evidence"
+	}
+	Assert-True ($rescanPlanText -match 'Sort-Object Version -Descending') 'Scheduled rescans do not select the newest durable package version.'
+	$workflowTexts = @(Get-ChildItem -LiteralPath .\.github\workflows -File -Filter '*.yml' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw })
+	$uploadCount = @($workflowTexts | ForEach-Object { [regex]::Matches($_, 'uses:\s*actions/upload-artifact@') }).Count
+	$retentionValues = @($workflowTexts | ForEach-Object { [regex]::Matches($_, 'retention-days:\s*([0-9]+)') | ForEach-Object { [int]$_.Groups[1].Value } })
+	Assert-True ($uploadCount -eq $retentionValues.Count) 'Every uploaded workflow artifact must declare an explicit retention period.'
+	Assert-True (@($retentionValues | Where-Object { $_ -lt 1 -or $_ -gt 90 }).Count -eq 0) 'Workflow artifact retention must stay within the public-repository 1-90 day policy.'
 	foreach ($consumerName in @('windows-powershell-5.1','windows-powershell-7','linux-powershell-7')) {
 		Assert-True ($consumerWorkflowText -match [regex]::Escape("name: $consumerName")) "Consumer compatibility matrix does not test $consumerName."
 	}
@@ -381,17 +399,18 @@ function Test-ProductionReadinessPolicies {
 		$verifiedText = Get-Content -LiteralPath $verifiedScript -Raw
 		Assert-True ($verifiedText -match 'ExpectedSha256') "$verifiedScript does not pass its publisher SHA-256 to the common downloader."
 	}
-	foreach ($quarantinedScript in @('.\src\pkgs\docker.ps1', '.\src\pkgs\nasm.ps1', '.\src\pkgs\zstd.ps1')) {
-		$config = (Read-TlcPackageDescriptor -Path $quarantinedScript).Config
-		Assert-True (-not [bool]$config.VerifiedDownloads) "$quarantinedScript is not quarantined despite missing publisher provenance metadata."
-		Assert-True (-not [string]::IsNullOrWhiteSpace([string]$config.UnverifiedDownloadReason)) "$quarantinedScript quarantine does not explain the provenance gap."
+	foreach ($verifiedScript in @('.\src\pkgs\docker.ps1', '.\src\pkgs\nasm.ps1', '.\src\pkgs\zstd.ps1')) {
+		$config = (Read-TlcPackageDescriptor -Path $verifiedScript).Config
+		$text = Get-Content -LiteralPath $verifiedScript -Raw
+		Assert-True (Get-TlcPackagePublicationState -Config $config).VerifiedDownloads "$verifiedScript remains provenance-quarantined."
+		Assert-True ($text -match 'ExpectedSha256') "$verifiedScript does not pass its reviewed SHA-256 to the common downloader."
+		Assert-True ($text -match 'microsoft/winget-pkgs commit') "$verifiedScript does not identify the independent checksum provenance."
 	}
 	foreach ($nodeMajor in @(22, 24)) {
 		$config = (Read-TlcPackageDescriptor -Path ".\src\pkgs\node\node$nodeMajor.ps1").Config
 		$nodePublication = Get-TlcPackagePublicationState -Config $config
-		Assert-True $nodePublication.VerifiedDownloads "Node $nodeMajor security quarantine incorrectly marks its verified upstream archive unverified."
-		Assert-True (-not $nodePublication.PublishEligible) "Node $nodeMajor can publish despite active HIGH/CRITICAL findings in its upstream npm bundle."
-		Assert-True (-not [string]::IsNullOrWhiteSpace($nodePublication.QuarantineReason)) "Node $nodeMajor security quarantine has no explanation."
+		Assert-True $nodePublication.VerifiedDownloads "Node $nodeMajor archive is not checksum verified."
+		Assert-True $nodePublication.PublishEligible "Node $nodeMajor remains statically quarantined after the upstream security release."
 	}
 	$sevenZipPackageText = Get-Content -LiteralPath .\src\pkgs\7-zip.ps1 -Raw
 	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'

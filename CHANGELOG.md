@@ -15,6 +15,8 @@
 - Add deterministic offline release rehearsals, catalog performance budgets, and automated container-base digest refresh pull requests.
 - Add automated immutable Toolchain consumer promotion with one coherent manifest/workflow pin and real Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 package-consumer tests.
 - Raise the production-code coverage gate to 80% with lifecycle, integrity, Docker publication, release pagination, cache, and subprocess regression tests.
+- Add daily and post-rescan signed package-health monitoring with retained reports and automatically managed GitHub alert issues.
+- Add signature-, SBOM-, and provenance-verified package alias rollback plus three-platform Toolchain consumer rollback.
 
 ### Security
 
@@ -22,8 +24,9 @@
 - Verify downloaded package inputs and cache hits before execution.
 - Rebuild K9s 0.51.0 for Windows and Linux from checksum-database-verified Go modules with a patched Go toolchain and dependency graph.
 - Rebuild kubectl for Windows and Linux from checksum-verified Go modules with patched Go, `x/net`, `x/sys`, and `x/text` dependencies.
-- Rebuild Cue and Helm from checksum-verified Go modules with fixed `x/text` and `oras-go` dependencies, and quarantine Node 24 until its upstream npm bundle clears HIGH/CRITICAL findings.
-- Quarantine Node 22 after its current upstream npm bundle failed the HIGH/CRITICAL release gate.
+- Rebuild Cue and Helm from checksum-verified Go modules with fixed `x/text` and `oras-go` dependencies.
+- Restore Node 22 and Node 24 to the normal fail-closed scan gate after patched upstream security releases, without vulnerability exceptions.
+- Verify Docker, NASM, and Zstandard with version-pinned SHA-256 values independently reviewed through immutable Microsoft WinGet manifest commits.
 - Exclude caches and temporary build content from published images.
 - Fail closed when signing or compatibility contracts are required.
 - Reduce CI permissions and secret exposure to protected release jobs.
@@ -32,6 +35,8 @@
 ### Changed
 
 - Use the platform-specific `kubectl-linux` package in Linux compatibility and post-publication certification, and reject runner-provided binaries that resolve outside Toolchain's digest-addressed content store.
+- Make `toolchain-consumer.json` the sole Toolchain pin, prevent promotion bots from modifying workflow files, validate promotions inside the initiating workflow, and merge them automatically only after all consumer gates pass.
+- Select the newest durable image during scheduled vulnerability rescans and require explicit 1-90 day retention on every workflow artifact.
 - Clean abandoned Docker Hub staging tags and orphaned Cosign attachments with dry-run previews, a publication safety delay, race-free release concurrency, and pagination resilient to Docker Hub's delayed tag-count refresh.
 - Remove version tags selected by fully or partially quarantined package descriptors, along with Cosign attachments that no remaining durable tag references, using a fail-closed dry-run-capable maintenance job.
 - Build ordinary Linux tool packages from `scratch` so extracted Toolchain packages contain only their intended payload instead of unrelated base-image files, vulnerabilities, hard links, and whiteouts, while contract tests inspect their stopped filesystems with a never-executed placeholder command.

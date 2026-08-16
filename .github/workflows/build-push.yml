@@ -35,10 +35,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Immutable Toolchain consumer used for package execution and local image contracts.
-  # Update only after the corresponding Toolchain commit has passed its release gates.
-  TOOLCHAIN_REPO: allsagetech/toolchain
-  TOOLCHAIN_REF: 9ee35a2f6ee5d5c0ffd08542030c20e5033d7279
   TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
 
 jobs:
@@ -49,6 +45,8 @@ jobs:
     outputs:
       matrix: ${{ steps.init.outputs.matrix }}
       has-packages: ${{ steps.init.outputs.has-packages }}
+      toolchain-repository: ${{ steps.init.outputs.toolchain-repository }}
+      toolchain-ref: ${{ steps.init.outputs.toolchain-ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,6 +63,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           . .\src\main.ps1
+
+          $consumer = Get-Content -LiteralPath .\toolchain-consumer.json -Raw | ConvertFrom-Json
+          if ([string]$consumer.repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw 'Toolchain consumer repository is invalid.'
+          }
+          if ([string]$consumer.ref -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'Toolchain consumer ref is not an immutable commit SHA.'
+          }
+          "toolchain-repository=$($consumer.repository)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "toolchain-ref=$(([string]$consumer.ref).ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
           function New-MatrixEntry([IO.FileInfo]$Script, [bool]$ForceBuild) {
             $config = (Read-TlcPackageDescriptor -Path $Script.FullName).Config
@@ -390,14 +398,14 @@ jobs:
       - name: Checkout pinned Toolchain contract source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: allsagetech/toolchain
-          ref: ${{ env.TOOLCHAIN_REF }}
+          repository: ${{ needs.init.outputs.toolchain-repository }}
+          ref: ${{ needs.init.outputs.toolchain-ref }}
           path: .ci/toolchain-contract
           persist-credentials: false
 
       - name: Install pinned Toolchain module
         shell: pwsh
-        run: .\scripts\install-toolchain.ps1 -Repo $env:TOOLCHAIN_REPO -Ref $env:TOOLCHAIN_REF
+        run: .\scripts\install-toolchain.ps1
 
       - name: Prepare Linux package mount
         if: runner.os == 'Linux'
@@ -515,7 +523,7 @@ jobs:
 
       - name: Install pinned Toolchain module
         shell: pwsh
-        run: .\scripts\install-toolchain.ps1 -Repo $env:TOOLCHAIN_REPO -Ref $env:TOOLCHAIN_REF
+        run: .\scripts\install-toolchain.ps1
 
       - name: Prepare Linux package mount
         if: runner.os == 'Linux'
@@ -598,8 +606,8 @@ jobs:
       - name: Checkout pinned Toolchain contract source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: allsagetech/toolchain
-          ref: ${{ env.TOOLCHAIN_REF }}
+          repository: ${{ needs.init.outputs.toolchain-repository }}
+          ref: ${{ needs.init.outputs.toolchain-ref }}
           path: .ci/toolchain-contract
           persist-credentials: false
 
@@ -607,7 +615,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .\scripts\install-toolchain.ps1 -Repo $env:TOOLCHAIN_REPO -Ref $env:TOOLCHAIN_REF -Token $env:GH_TOKEN
+        run: .\scripts\install-toolchain.ps1 -Token $env:GH_TOKEN
 
       - name: Prepare Linux package mount
         if: runner.os == 'Linux'

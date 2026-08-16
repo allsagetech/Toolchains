@@ -7,13 +7,15 @@ Every validation run first performs an offline release rehearsal over the comple
 Managed container bases are pinned by digest. A scheduled workflow resolves their canonical registry digests and opens or updates an automation pull request; `./scripts/update-container-base-digests.ps1 -Check` provides the same fail-closed verification locally.
 
 Toolchain itself is also an immutable consumer dependency. A successful
-Toolchain release dispatches the `toolchain-released` event; a weekly schedule
-provides a recovery path if dispatch credentials are unavailable. The promotion
+Toolchain release dispatches the `toolchain-released` event; a six-hour schedule
+provides an automatic recovery path if dispatch credentials are unavailable. The promotion
 workflow proves that the release tag, commit, `VERSION`, and released package
-contract agree, then updates `toolchain-consumer.json` and every workflow pin in
-one pull request. That pull request must pass real package pull/load tests under
-Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 before
-merge. Package publication never consumes a mutable Toolchain branch.
+contract agree, then updates the single-source `toolchain-consumer.json` and
+package schema without modifying workflow files. The promotion workflow itself
+runs real package pull/load tests under Windows PowerShell 5.1, Windows
+PowerShell 7, and Linux PowerShell 7, and automatically merges the pull request
+only after all three pass. Package publication resolves its immutable commit
+from the manifest and never consumes a mutable Toolchain branch.
 
 1. resolve and verify upstream source versions and checksums;
 2. stage package content in an isolated package root;
@@ -68,7 +70,19 @@ in-flight releases. Manual cleanup previews changes by default. Cleanup uses
 Docker Hub's tag endpoint and never deletes registry manifests or attachments
 whose digest is still referenced by a final tag.
 
-For rollback, move a mutable convenience tag only after selecting a previously verified immutable digest. Never overwrite a version tag.
+For a package rollback, run **Roll Back Package Alias** with an explicit package,
+previously published version, mutable `package-latest` or `package-stable` alias,
+expected SHA-256 digest, and `ROLLBACK` confirmation. The protected workflow
+re-verifies the immutable version tag's Cosign signature, SPDX attestation, and
+SLSA provenance offline before moving only the mutable alias, then proves the
+alias resolves to the same digest. It never overwrites a version tag.
+
+For a Toolchain consumer rollback, manually run **Promote Toolchain Release**
+with the older published version. The same release/tag/commit/`VERSION` checks,
+three-platform consumer tests, pull request, and automatic merge gates apply to
+rollback and forward promotion. GitHub releases and immutable package version
+tags are retained; rollback changes a consumer pin or convenience alias, not
+historical evidence.
 
 Model category markers are untrusted discovery metadata, not package versions, authorization, or integrity evidence. An unprivileged job validates package descriptors and exports only the tier-derived model package names. A fresh, main-only publisher job downloads that plan, re-fetches registry tags through Docker Hub's documented namespace API, and publishes `tlc-kind-model-v1-<generation>-<count>--<package>` tags. An empty catalog uses the single `tlc-kind-model-v1-<generation>-0--empty` sentinel.
 

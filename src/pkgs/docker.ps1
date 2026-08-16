@@ -6,12 +6,14 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'docker'
-	VerifiedDownloads = $false
-	UnverifiedDownloadReason = 'Docker does not publish a SHA-256 digest or supported signature for its Windows static ZIP.'
 }
 
 function global:Install-TlcPackage {
-	$DockerVersion = '29.1.5'
+	# Independently reviewed checksum from microsoft/winget-pkgs commit
+	# 096356d4bd44c85b4e5a7b1752d57d61b114ff0b. The payload remains on
+	# Docker's official HTTPS origin and any byte change fails closed.
+	$DockerVersion = '29.7.2'
+	$ExpectedSha256 = 'ed9222f478a5d143ac90e8e2fd3209b5076382cdb4b210321f97aa4b68bc6811'
 	$upstream = [TlcSemanticVersion]::new($DockerVersion)
 	$TlcPackageConfig.Version = $DockerVersion
 	$TlcPackageConfig.UpToDate = -not $upstream.LaterThan($TlcPackageConfig.Latest)
@@ -30,7 +32,7 @@ function global:Install-TlcPackage {
 
 	Write-Host "Downloading Docker $DockerVersion from $Download"
 	try {
-		Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath
+		Invoke-TlcWebRequest -Uri $Download -OutFile $ZipPath -ExpectedSha256 $ExpectedSha256
 
 		if (-not (Test-Path $ZipPath)) {
 			throw "Failed to download Docker archive from $Download"

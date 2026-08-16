@@ -7,26 +7,24 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'zstd'
-	VerifiedDownloads = $false
-	UnverifiedDownloadReason = 'Zstandard does not publish a SHA-256 digest or supported signature for its Windows ZIP.'
 }
 
 function global:Install-TlcPackage {
-	$Params = @{
-		Owner = 'facebook'
-		Repo = 'zstd'
-		AssetPattern = 'zstd-v.+-win64.zip'
-		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
-	}
-	$Asset = Get-GitHubRelease @Params
-	$TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
-	$TlcPackageConfig.Version = $Asset.Version.ToString()
+	# Independently reviewed checksum from microsoft/winget-pkgs commit
+	# 174e50f32620b225d61f4013c1fd7331457a4920. The archive is fetched
+	# from Meta's official GitHub release and any byte change fails closed.
+	$Version = '1.5.7'
+	$ExpectedSha256 = 'acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9'
+	$Upstream = [TlcSemanticVersion]::new($Version)
+	$TlcPackageConfig.UpToDate = -not $Upstream.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $Version
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
 	$Params = @{
-		AssetName = $Asset.Name
-		AssetURL = $Asset.URL
+		AssetName = "zstd-v$Version-win64.zip"
+		AssetURL = "https://github.com/facebook/zstd/releases/download/v$Version/zstd-v$Version-win64.zip"
+		ExpectedSha256 = $ExpectedSha256
 	}
 	Install-BuildTool @Params
 	Write-TlcVars @{

@@ -3,8 +3,8 @@
 This file is generated from package descriptors. Run `./scripts/export-package-inventory.ps1` after changing `src/pkgs`.
 
 - Descriptors: 103
-- Publication eligible: 98
-- Quarantined: 5
+- Publication eligible: 103
+- Quarantined: 0
 
 | Package | Canonical name | Platform | Tier | Publication | Source |
 | --- | --- | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ This file is generated from package descriptors. Run `./scripts/export-package-i
 | cue | cue | windows/amd64 | tooling | eligible | `src/pkgs/cue.ps1` |
 | deno | deno | windows/amd64 | tooling | eligible | `src/pkgs/deno.ps1` |
 | dependabot | dependabot | windows/amd64 | tooling | eligible | `src/pkgs/dependabot.ps1` |
-| docker | docker | windows/amd64 | tooling | quarantined: Docker does not publish a SHA-256 digest or supported signature for its Windows static ZIP. | `src/pkgs/docker.ps1` |
+| docker | docker | windows/amd64 | tooling | eligible | `src/pkgs/docker.ps1` |
 | docker-desktop | docker-desktop | windows/amd64 | tooling | eligible | `src/pkgs/docker-desktop.ps1` |
 | dotnet-runtime | dotnet-runtime | windows/amd64 | tooling | eligible | `src/pkgs/dotnet-runtime.ps1` |
 | dotnet-sdk | dotnet-sdk | windows/amd64 | tooling | eligible | `src/pkgs/dotnet-sdk.ps1` |
@@ -66,13 +66,13 @@ This file is generated from package descriptors. Run `./scripts/export-package-i
 | mdbook | mdbook | windows/amd64 | tooling | eligible | `src/pkgs/mdBook.ps1` |
 | MiKTeX | MiKTeX | windows/amd64 | tooling | eligible | `src/pkgs/miktex.ps1` |
 | mingw | mingw | windows/amd64 | tooling | eligible | `src/pkgs/mingw.ps1` |
-| nasm | nasm | windows/amd64 | tooling | quarantined: NASM does not publish a SHA-256 digest or supported signature for its Windows ZIP. | `src/pkgs/nasm.ps1` |
+| nasm | nasm | windows/amd64 | tooling | eligible | `src/pkgs/nasm.ps1` |
 | nats-server | nats-server | windows/amd64 | tooling | eligible | `src/pkgs/nats-server.ps1` |
 | ninja | ninja | windows/amd64 | tooling | eligible | `src/pkgs/ninja.ps1` |
 | node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node18.ps1` |
 | node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node20.ps1` |
-| node | node | windows/amd64 | tooling | quarantined: Node.js 22 currently bundles npm dependencies with active HIGH/CRITICAL vulnerabilities; restore publication after an upstream patched bundle is available. | `src/pkgs/node/node22.ps1` |
-| node | node | windows/amd64 | tooling | quarantined: Node.js 24 currently bundles npm dependencies with active HIGH/CRITICAL vulnerabilities; restore publication after an upstream patched bundle is available. | `src/pkgs/node/node24.ps1` |
+| node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node22.ps1` |
+| node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node24.ps1` |
 | node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node25.ps1` |
 | notepadpp | notepadpp | windows/amd64 | tooling | eligible | `src/pkgs/notepadplus.ps1` |
 | obsidian | obsidian | windows/amd64 | tooling | eligible | `src/pkgs/obsidian.ps1` |
@@ -110,4 +110,4 @@ This file is generated from package descriptors. Run `./scripts/export-package-i
 | yarn | yarn | windows/amd64 | tooling | eligible | `src/pkgs/yarn/yarn.ps1` |
 | zarf | zarf | windows/amd64 | tooling | eligible | `src/pkgs/zarf.ps1` |
 | zig | zig | windows/amd64 | tooling | eligible | `src/pkgs/zig.ps1` |
-| zstd | zstd | windows/amd64 | tooling | quarantined: Zstandard does not publish a SHA-256 digest or supported signature for its Windows ZIP. | `src/pkgs/zstd.ps1` |
+| zstd | zstd | windows/amd64 | tooling | eligible | `src/pkgs/zstd.ps1` |
