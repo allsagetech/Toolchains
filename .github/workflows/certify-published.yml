@@ -18,7 +18,7 @@ concurrency:
 
 env:
   TOOLCHAIN_REPO: allsagetech/toolchain
-  TOOLCHAIN_REF: c484ec0579dc90c88bcd5da7f4830386bb0f87bd
+  TOOLCHAIN_REF: 9ee35a2f6ee5d5c0ffd08542030c20e5033d7279
 
 jobs:
   package-contract:

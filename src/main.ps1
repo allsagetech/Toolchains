@@ -225,9 +225,19 @@ function Invoke-DockerBuild {
 	foreach ($l in $labels) { $dockerArguments += @('--label', $l) }
 	$dockerArguments += @($pkgRoot)
 
-	& docker @dockerArguments
-	if ($LASTEXITCODE -ne 0) {
-		throw "docker build failed with exit code $LASTEXITCODE for $Tag"
+	# BuildKit writes normal progress to stderr. Merge that progress into the
+	# success stream so the isolated package runspace does not mistake a
+	# successful build for a PowerShell error record.
+	$oldNativePreference = $global:PSNativeCommandUseErrorActionPreference
+	try {
+		$global:PSNativeCommandUseErrorActionPreference = $false
+		& docker @dockerArguments 2>&1 | ForEach-Object { Write-Host ([string]$_) }
+		$dockerExitCode = $LASTEXITCODE
+	} finally {
+		$global:PSNativeCommandUseErrorActionPreference = $oldNativePreference
+	}
+	if ($dockerExitCode -ne 0) {
+		throw "docker build failed with exit code $dockerExitCode for $Tag"
 	}
 	Assert-TlcBuiltImageContract -Tag $Tag -ExpectedLabels $labels
 }
