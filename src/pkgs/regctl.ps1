@@ -7,28 +7,39 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'regctl'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	PatchedCryptoVersion = 'v0.52.0'
 }
 
 function global:Install-TlcPackage {
 	$Params = @{
 		Owner = 'regclient'
 		Repo = 'regclient'
-		AssetPattern = 'regctl-windows-amd64.exe'
 		TagPattern = '^v([0-9]+)\.([0-9]+)\.?([0-9]+)?$'
 	}
-	$Asset = Get-GitHubRelease @Params
-	$TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
-	$TlcPackageConfig.Version = $Asset.Version.ToString()
+	$Latest = Get-GitHubTag @Params
+	$upstreamVersion = $Latest.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $packageVersion.ToString()
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	New-Item -Path (Get-TlcPkgRoot) -ItemType Directory -Force -ErrorAction Ignore | Out-Null
-	Invoke-TlcWebRequest -Uri $Asset.URL -OutFile (Get-TlcPkgPath 'regctl.exe')
-	Invoke-TlcWebRequest -Uri $Asset.URL.Replace('regctl-', 'regbot-') -OutFile (Get-TlcPkgPath 'regbot.exe')
-	Invoke-TlcWebRequest -Uri $Asset.URL.Replace('regctl-', 'regsync-') -OutFile (Get-TlcPkgPath 'regsync.exe')
+
+	foreach ($command in @('regctl', 'regbot', 'regsync')) {
+		Invoke-TlcVerifiedGoCommandBuild `
+			-Module 'github.com/regclient/regclient' `
+			-Version ([string]$Latest.Name) `
+			-Command "github.com/regclient/regclient/cmd/$command" `
+			-OutputPath (Get-TlcPkgPath "$command.exe") `
+			-MinimumModules @{ 'golang.org/x/crypto' = $TlcPackageConfig.PatchedCryptoVersion } `
+			-GoToolchain $TlcPackageConfig.GoToolchain
+	}
+
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'regctl.exe' | Select-Object -First 1).DirectoryName
+			path = Get-TlcPkgRoot
 		}
 	}
 }

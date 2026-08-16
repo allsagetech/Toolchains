@@ -655,6 +655,12 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($natsServerText -match "GoToolchain = 'go1\.26\.6'") 'NATS Server does not pin the fixed Go toolchain.'
 	Assert-True ($natsServerText -match "PatchedCryptoVersion = 'v0\.55\.0'") 'NATS Server does not require the fixed golang.org/x/crypto version.'
 	Assert-True ($natsServerText -match 'BuildRevision = 1') 'NATS Server patched source build does not carry a republishable package revision.'
+	$regctlText = Get-Content -LiteralPath .\src\pkgs\regctl.ps1 -Raw
+	Assert-True ($regctlText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Regctl still packages the vulnerable upstream binaries.'
+	Assert-True ($regctlText -match "GoToolchain = 'go1\.26\.6'") 'Regctl does not pin the fixed Go toolchain.'
+	Assert-True ($regctlText -match "PatchedCryptoVersion = 'v0\.52\.0'") 'Regctl does not require the fixed golang.org/x/crypto version.'
+	Assert-True ($regctlText -match "@\('regctl', 'regbot', 'regsync'\)") 'Regctl does not rebuild every packaged command.'
+	Assert-True ($regctlText -match 'BuildRevision = 1') 'Regctl patched source build does not carry a republishable package revision.'
 	foreach ($kubectlScript in @('.\src\pkgs\kubectl.ps1', '.\src\pkgs\kubectl-linux.ps1')) {
 		$kubectlText = Get-Content -LiteralPath $kubectlScript -Raw
 		Assert-True ($kubectlText -match 'Initialize-TlcKubectlPackage') "$kubectlScript bypasses the shared verified source build."
