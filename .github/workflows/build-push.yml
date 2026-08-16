@@ -1014,7 +1014,7 @@ jobs:
           } else {
             Write-Host 'Docker Buildx does not support --prefer-index; using its compatible create behavior.'
           }
-          $createArguments += @('--tag', $leafTag, $digestRef)
+          $createArguments += @('-t', $leafTag, $digestRef)
           & docker @createArguments
           if ($LASTEXITCODE -ne 0) { throw "failed to publish platform leaf alias $leafTag" }
           $leafManifest = @((& docker manifest inspect --verbose $leafTag | Out-String).Trim() | ConvertFrom-Json)
