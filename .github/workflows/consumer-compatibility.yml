@@ -46,7 +46,7 @@ jobs:
           - name: linux-powershell-7
             os: ubuntu-22.04
             shell: pwsh
-            package: kubectl:latest
+            package: kubectl-linux:latest
             command: kubectl
     steps:
       - name: Checkout Toolchains
