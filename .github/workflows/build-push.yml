@@ -1008,15 +1008,23 @@ jobs:
           $createArguments = @('buildx', 'imagetools', 'create')
           $helpArguments = @($createArguments + '--help')
           $imagetoolsHelp = (& docker @helpArguments 2>&1 | Out-String)
-          if ($LASTEXITCODE -ne 0) { throw 'could not inspect Docker Buildx imagetools capabilities' }
-          if ($imagetoolsHelp -match '(?m)^\s*--prefer-index(?:[=\s]|$)') {
-            $createArguments += '--prefer-index=false'
+          $buildxCreateAvailable = $LASTEXITCODE -eq 0 -and
+            $imagetoolsHelp -match '(?m)^Usage:\s+docker buildx imagetools create\b' -and
+            $imagetoolsHelp -match '(?m)^\s*(?:-t,\s*)?--tag\b'
+          if ($buildxCreateAvailable) {
+            if ($imagetoolsHelp -match '(?m)^\s*--prefer-index(?:[=\s]|$)') {
+              $createArguments += '--prefer-index=false'
+            }
+            $createArguments += @('--tag', $leafTag, $digestRef)
+            & docker @createArguments
+            if ($LASTEXITCODE -ne 0) { throw "failed to publish platform leaf alias $leafTag with Docker Buildx" }
           } else {
-            Write-Host 'Docker Buildx does not support --prefer-index; using its compatible create behavior.'
+            Write-Host 'Docker Buildx imagetools create is unavailable; using Docker manifest compatibility mode.'
+            & docker manifest create $leafTag $digestRef
+            if ($LASTEXITCODE -ne 0) { throw "failed to create compatible platform leaf alias $leafTag" }
+            & docker manifest push $leafTag
+            if ($LASTEXITCODE -ne 0) { throw "failed to publish compatible platform leaf alias $leafTag" }
           }
-          $createArguments += @('-t', $leafTag, $digestRef)
-          & docker @createArguments
-          if ($LASTEXITCODE -ne 0) { throw "failed to publish platform leaf alias $leafTag" }
           $leafManifest = @((& docker manifest inspect --verbose $leafTag | Out-String).Trim() | ConvertFrom-Json)
           if ($LASTEXITCODE -ne 0) { throw "could not verify platform leaf alias $leafTag" }
           $leafDigests = @($leafManifest | ForEach-Object { [string]$_.Descriptor.digest })
