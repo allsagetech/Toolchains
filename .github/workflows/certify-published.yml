@@ -33,12 +33,15 @@ jobs:
           - name: windows-powershell-5.1
             os: windows-2022
             shell: powershell
+            package: kubectl:latest
           - name: windows-powershell-7
             os: windows-2022
             shell: pwsh
+            package: kubectl:latest
           - name: linux-powershell-7
             os: ubuntu-22.04
             shell: pwsh
+            package: kubectl-linux:latest
     steps:
       - name: Checkout Toolchains
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,20 +62,28 @@ jobs:
       - name: Pull, load, and execute an immutable package (PowerShell 7)
         if: matrix.shell == 'pwsh'
         shell: pwsh
+        env:
+          CONSUMER_PACKAGE: ${{ matrix.package }}
         run: |
           Import-Module Toolchain -Force
-          tlc pull kubectl
-          tlc load kubectl
-          kubectl version --client
+          tlc pull $env:CONSUMER_PACKAGE
+          tlc load $env:CONSUMER_PACKAGE
+          $resolved = [string](Get-Command kubectl -ErrorAction Stop).Source
+          if ($resolved -notmatch '[\\/]content[\\/][0-9a-fA-F]{64}[\\/]') { throw "kubectl resolved outside Toolchain's digest-addressed content store: $resolved" }
+          & $resolved version --client
           if ($LASTEXITCODE -ne 0) { throw 'kubectl consumer certification failed' }
       - name: Pull, load, and execute an immutable package (Windows PowerShell 5.1)
         if: matrix.shell == 'powershell'
         shell: powershell
+        env:
+          CONSUMER_PACKAGE: ${{ matrix.package }}
         run: |
           Import-Module Toolchain -Force
-          tlc pull kubectl
-          tlc load kubectl
-          kubectl version --client
+          tlc pull $env:CONSUMER_PACKAGE
+          tlc load $env:CONSUMER_PACKAGE
+          $resolved = [string](Get-Command kubectl -ErrorAction Stop).Source
+          if ($resolved -notmatch '[\\/]content[\\/][0-9a-fA-F]{64}[\\/]') { throw "kubectl resolved outside Toolchain's digest-addressed content store: $resolved" }
+          & $resolved version --client
           if ($LASTEXITCODE -ne 0) { throw 'kubectl consumer certification failed' }
 
   cluster-smoke:

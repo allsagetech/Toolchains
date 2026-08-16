@@ -31,7 +31,7 @@
 
 ### Changed
 
-- Use the platform-specific `kubectl-linux` package in the Linux consumer compatibility gate so the test validates Toolchain's digest-addressed executable instead of a runner-provided binary.
+- Use the platform-specific `kubectl-linux` package in Linux compatibility and post-publication certification, and reject runner-provided binaries that resolve outside Toolchain's digest-addressed content store.
 - Clean abandoned Docker Hub staging tags and orphaned Cosign attachments with dry-run previews, a publication safety delay, race-free release concurrency, and pagination resilient to Docker Hub's delayed tag-count refresh.
 - Remove version tags selected by fully or partially quarantined package descriptors, along with Cosign attachments that no remaining durable tag references, using a fail-closed dry-run-capable maintenance job.
 - Build ordinary Linux tool packages from `scratch` so extracted Toolchain packages contain only their intended payload instead of unrelated base-image files, vulnerabilities, hard links, and whiteouts, while contract tests inspect their stopped filesystems with a never-executed placeholder command.

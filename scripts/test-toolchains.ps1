@@ -336,6 +336,8 @@ function Test-ProductionReadinessPolicies {
 		Assert-True ($consumerWorkflowText -match [regex]::Escape("name: $consumerName")) "Consumer compatibility matrix does not test $consumerName."
 	}
 	Assert-True ($consumerWorkflowText -match 'name:\s*linux-powershell-7[\s\S]+?package:\s*kubectl-linux:latest') 'Linux consumer compatibility does not use the Linux kubectl package.'
+	Assert-True ($certificationWorkflowText -match 'name:\s*linux-powershell-7[\s\S]+?package:\s*kubectl-linux:latest') 'Published-package certification does not use the Linux kubectl package.'
+	Assert-True ($certificationWorkflowText -match "kubectl resolved outside Toolchain's digest-addressed content store") 'Published-package certification does not reject runner-provided kubectl binaries.'
 	Assert-True ($consumerWorkflowText -match 'Install promoted consumer with PowerShell 7[\s\S]+Pull, load, and inspect package under Windows PowerShell 5\.1') 'Consumer compatibility does not exercise a PowerShell 7 installer to Windows PowerShell 5.1 handoff.'
 	Assert-True ($consumerWorkflowText -match 'test-toolchain-consumer\.ps1') 'Consumer compatibility does not pull and load a real published package.'
 	Assert-True ($certificationWorkflowText -match "(?m)^\s{6}- name: Install pinned Toolchain consumer \(PowerShell 7\)\r?\n\s{8}if: matrix\.shell == 'pwsh'\r?\n\s{8}shell: pwsh\s*`$") 'PowerShell 7 consumer certification is not installed under PowerShell 7.'
