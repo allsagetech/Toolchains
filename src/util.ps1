@@ -111,6 +111,7 @@ function Invoke-TlcVerifiedGoCommandBuild {
 		[Parameter(Mandatory=$true)][string]$Command,
 		[Parameter(Mandatory=$true)][string]$OutputPath,
 		[hashtable]$MinimumModules = @{},
+		[string[]]$ForbiddenPackagePrefixes = @(),
 		[string]$GoToolchain = 'go1.26.6',
 		[string]$BuildTags,
 		[string]$LdFlags
@@ -162,6 +163,25 @@ function Invoke-TlcVerifiedGoCommandBuild {
 			$minimumSemanticVersion = [TlcSemanticVersion]::new($minimumVersion.TrimStart('v'))
 			if (-not $resolvedSemanticVersion.Equals($minimumSemanticVersion) -and -not $resolvedSemanticVersion.LaterThan($minimumSemanticVersion)) {
 				throw "$requiredModule resolved to $resolvedVersion, below required version $minimumVersion"
+			}
+		}
+
+		if ($ForbiddenPackagePrefixes.Count -gt 0) {
+			$dependencyText = Invoke-TlcNativeCommand -FilePath $go `
+				-ArgumentList @('list', '-deps', $Command) `
+				-FailureMessage 'verified Go dependency inspection failed' -PassThru
+			$dependencies = @($dependencyText -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+			$forbiddenDependencies = @()
+			foreach ($prefix in $ForbiddenPackagePrefixes) {
+				if ([string]::IsNullOrWhiteSpace($prefix)) { throw 'forbidden Go package prefix cannot be empty' }
+				$forbiddenDependencies += @($dependencies | Where-Object {
+					[string]::Equals($_, $prefix, [StringComparison]::Ordinal) -or
+					$_.StartsWith("$prefix/", [StringComparison]::Ordinal)
+				})
+			}
+			$forbiddenDependencies = @($forbiddenDependencies | Sort-Object -Unique)
+			if ($forbiddenDependencies.Count -gt 0) {
+				throw "verified Go command links forbidden package(s): $($forbiddenDependencies -join ', ')"
 			}
 		}
 

@@ -27,6 +27,7 @@
 - Rebuild Cue and Helm from checksum-verified Go modules with fixed `x/text` and `oras-go` dependencies.
 - Restore Node 22 and Node 24 to the normal fail-closed scan gate with checksum-verified npm 12.0.2 and fixed dependency overlays, without vulnerability exceptions.
 - Rebuild Docker CLI and daemon 29.7.2 from their immutable upstream commits with Go 1.26.6, preserving Windows service resources while removing vulnerable Go 1.26.5 binaries, and verify both source archives with pinned SHA-256 values.
+- Rebuild Dependabot CLI 1.92.0 without its Go module cache, reject the daemon authorization package at source-graph verification time, and document its daemon-only Moby advisory status with OpenVEX.
 - Verify NASM and Zstandard with version-pinned SHA-256 values independently reviewed through immutable Microsoft WinGet manifest commits.
 - Exclude caches and temporary build content from published images.
 - Fail closed when signing or compatibility contracts are required.

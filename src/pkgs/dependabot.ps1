@@ -5,54 +5,37 @@ SPDX-License-Identifier: MPL-2.0
 #>
 
 $global:TlcPackageConfig = @{
-    Name = 'dependabot'
+	Name = 'dependabot'
+	CanonicalName = 'dependabot'
+	Platform = 'windows/amd64'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	Vex = '.github/vex/dependabot.openvex.json'
 }
 
 function global:Install-TlcPackage {
-    $Params = @{
-        Owner      = 'dependabot'
-        Repo       = 'cli'
-        TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
-    }
-    $Latest = Get-GitHubTag @Params
+	$latest = Get-GitHubTag -Owner 'dependabot' -Repo 'cli' -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+	$packageVersion = "$($latest.Version)+$($TlcPackageConfig.BuildRevision)"
+	$version = [TlcSemanticVersion]::new($packageVersion)
+	$TlcPackageConfig.Version = $packageVersion
+	$TlcPackageConfig.UpToDate = -not $version.LaterThan($TlcPackageConfig.Latest)
+	if ($TlcPackageConfig.UpToDate) { return }
 
-    $TlcPackageConfig.UpToDate = -not $Latest.Version.LaterThan($TlcPackageConfig.Latest)
-    $TlcPackageConfig.Version  = $Latest.Version.ToString()
-    if ($TlcPackageConfig.UpToDate) {
-        return
-    }
+	$packageRoot = Get-TlcPkgRoot
+	New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+	Invoke-TlcVerifiedGoCommandBuild `
+		-Module 'github.com/dependabot/cli' `
+		-Version $latest.name `
+		-Command 'github.com/dependabot/cli/cmd/dependabot' `
+		-OutputPath (Get-TlcPkgPath 'dependabot.exe') `
+		-GoToolchain $TlcPackageConfig.GoToolchain `
+		-ForbiddenPackagePrefixes @(
+			'github.com/docker/docker/pkg/authorization',
+			'github.com/moby/moby/pkg/authorization',
+			'github.com/moby/moby/v2/pkg/authorization'
+		)
 
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for dependabot.'
-    }
-
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT ("dependabot-{0}" -f $Latest.Version)
-
-    if (-not (Test-Path $InstallRoot)) {
-        New-Item -ItemType Directory -Path $InstallRoot | Out-Null
-    }
-
-    $GoPath = Join-Path $InstallRoot 'gopath'
-    if (-not (Test-Path $GoPath)) {
-        New-Item -ItemType Directory -Path $GoPath | Out-Null
-    }
-
-    $env:GOBIN      = $InstallRoot
-    $env:GOPATH     = $GoPath
-    $env:GOMODCACHE = Join-Path $GoPath 'pkg\mod'
-
-    $VersionTag = $Latest.name
-
-	$go = Get-TlcApplicationPath -Name 'go'
-	Invoke-TlcNativeCommand -FilePath $go `
-		-ArgumentList @('install', ("github.com/dependabot/cli/cmd/dependabot@{0}" -f $VersionTag)) `
-		-FailureMessage "go install for dependabot failed; make sure the 'go' package is installed and on PATH"
-
-    Write-TlcVars @{
-        env = @{
-            path = $InstallRoot
-        }
-    }
+	Write-TlcVars @{ env = @{ path = $packageRoot } }
 }
 
 function global:Test-TlcPackageInstall {

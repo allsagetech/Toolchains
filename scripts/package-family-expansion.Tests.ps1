@@ -223,6 +223,22 @@ Describe 'Verified Go builds and network cache behavior' {
 		Should -Invoke Invoke-TlcNativeCommand -Times 4 -Exactly
 	}
 
+	It 'rejects a forbidden package in a verified Go command graph' {
+		Mock Get-TlcApplicationPath { 'go-fixture' }
+		Mock Invoke-TlcNativeCommand {
+			if ($ArgumentList[0] -eq 'list' -and $ArgumentList[1] -eq '-deps') {
+				return "example.test/safe$([Environment]::NewLine)example.test/forbidden/subpackage"
+			}
+		}
+		$output = Join-Path $env:TLC_PKG_ROOT 'tool.exe'
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 -Command example.test/tool/cmd/tool `
+				-OutputPath $output -ForbiddenPackagePrefixes @('example.test/forbidden')
+		} | Should -Throw '*links forbidden package*example.test/forbidden/subpackage*'
+		Should -Invoke Invoke-TlcNativeCommand -Times 3 -Exactly
+		Should -Invoke Invoke-TlcNativeCommand -Times 0 -Exactly -ParameterFilter { $ArgumentList[0] -eq 'build' }
+	}
+
 	It 'downloads once, records a verified cache entry, and reuses it' {
 		$payload = 'verified payload'
 		$sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))).Replace('-', '').ToLowerInvariant()

@@ -1,0 +1,42 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/allsagetech/Toolchains/security/vex/dependabot-2026-08-16",
+  "author": "AllSageTech",
+  "timestamp": "2026-08-16T11:00:00-05:00",
+  "version": 1,
+  "tooling": "https://github.com/allsagetech/Toolchains",
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://github.com/advisories/GHSA-x744-4wpc-v9h2",
+        "name": "CVE-2026-34040",
+        "description": "Moby authorization-plugin bypass when processing oversized request bodies"
+      },
+      "products": [
+        {
+          "@id": "pkg:golang/github.com/dependabot/cli",
+          "identifiers": {
+            "purl": "pkg:golang/github.com/dependabot/cli"
+          },
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker",
+              "identifiers": {
+                "purl": "pkg:golang/github.com/docker/docker"
+              }
+            },
+            {
+              "@id": "pkg:golang/github.com/moby/moby",
+              "identifiers": {
+                "purl": "pkg:golang/github.com/moby/moby"
+              }
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The advisory is confined to pkg/authorization in the Docker daemon. Dependabot CLI uses Docker API/client packages and Moby stdcopy/name helpers; its verified source build fails if any pkg/authorization package enters the compiled dependency graph."
+    }
+  ]
+}

@@ -606,8 +606,7 @@ function Test-ProductionReadinessPolicies {
 		'.\src\pkgs\kind-linux.ps1',
 		'.\src\pkgs\k3d.ps1',
 		'.\src\pkgs\k3d-linux.ps1',
-		'.\src\pkgs\docker.ps1',
-		'.\src\pkgs\dependabot.ps1'
+		'.\src\pkgs\docker.ps1'
 	)
 	foreach ($goSourceBuildScript in $goSourceBuildScripts) {
 		$goSourceBuildText = Get-Content -LiteralPath $goSourceBuildScript -Raw
@@ -616,6 +615,11 @@ function Test-ProductionReadinessPolicies {
 		Assert-True ($goSourceBuildText -match 'Invoke-TlcNativeCommand') "$goSourceBuildScript bypasses native exit-code isolation."
 		Assert-True ($goSourceBuildText -notmatch '(?m)&\s+(?:\$go|go)\s+(?:build|get|install|list|mod)\b') "$goSourceBuildScript can still turn successful Go stderr into a package failure."
 	}
+	$dependabotText = Get-Content -LiteralPath .\src\pkgs\dependabot.ps1 -Raw
+	Assert-True ($dependabotText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Dependabot does not use the isolated checksum-database-verified Go source build.'
+	Assert-True ($dependabotText -match 'ForbiddenPackagePrefixes') 'Dependabot does not verify that the VEX-covered authorization package is absent.'
+	Assert-True ($dependabotText -match 'BuildRevision = 1') 'Dependabot hardened package does not carry a republishable build revision.'
+	Assert-True ($dependabotText -notmatch '(?m)\$env:(?:GOPATH|GOMODCACHE)\s*=') 'Dependabot can still publish its Go module cache and fixture private keys.'
 	foreach ($optionalX86Script in @(
 		'.\src\pkgs\jdk\jdk8.ps1', '.\src\pkgs\jdk\jdk11.ps1', '.\src\pkgs\jdk\jdk17.ps1',
 		'.\src\pkgs\jre\jre8.ps1', '.\src\pkgs\jre\jre11.ps1', '.\src\pkgs\jre\jre17.ps1'
