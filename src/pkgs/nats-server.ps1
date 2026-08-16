@@ -7,29 +7,37 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
 	Name = 'nats-server'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	PatchedCryptoVersion = 'v0.55.0'
 }
 
 function global:Install-TlcPackage {
 	$Params = @{
 		Owner = 'nats-io'
 		Repo = 'nats-server'
-		AssetPattern = 'nats-server-v.+-windows-amd64.zip'
 		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
 	}
-	$Asset = Get-GitHubRelease @Params
-	$TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
-	$TlcPackageConfig.Version = $Asset.Version.ToString()
+	$Latest = Get-GitHubTag @Params
+	$upstreamVersion = $Latest.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $packageVersion.ToString()
 	if ($TlcPackageConfig.UpToDate) {
 		return
 	}
-	$Params = @{
-		AssetName = $Asset.Name
-		AssetURL = $Asset.URL
-	}
-	Install-BuildTool @Params
+
+	Invoke-TlcVerifiedGoCommandBuild `
+		-Module 'github.com/nats-io/nats-server/v2' `
+		-Version ([string]$Latest.Name) `
+		-Command 'github.com/nats-io/nats-server/v2' `
+		-OutputPath (Get-TlcPkgPath 'nats-server.exe') `
+		-MinimumModules @{ 'golang.org/x/crypto' = $TlcPackageConfig.PatchedCryptoVersion } `
+		-GoToolchain $TlcPackageConfig.GoToolchain
+
 	Write-TlcVars @{
 		env = @{
-			path = (Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'nats-server.exe' | Select-Object -First 1).DirectoryName
+			path = Get-TlcPkgRoot
 		}
 	}
 }

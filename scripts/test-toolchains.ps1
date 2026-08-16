@@ -650,6 +650,11 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($helmText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Helm still packages the vulnerable upstream binary archive.'
 	Assert-True ($helmText -match "PatchedOrasVersion = 'v2\.6\.2'") 'Helm does not require the fixed oras-go version.'
 	Assert-True ($helmText -match 'BuildRevision = 1') 'Helm patched source build does not carry a republishable package revision.'
+	$natsServerText = Get-Content -LiteralPath .\src\pkgs\nats-server.ps1 -Raw
+	Assert-True ($natsServerText -match 'Invoke-TlcVerifiedGoCommandBuild') 'NATS Server still packages the vulnerable upstream binary archive.'
+	Assert-True ($natsServerText -match "GoToolchain = 'go1\.26\.6'") 'NATS Server does not pin the fixed Go toolchain.'
+	Assert-True ($natsServerText -match "PatchedCryptoVersion = 'v0\.55\.0'") 'NATS Server does not require the fixed golang.org/x/crypto version.'
+	Assert-True ($natsServerText -match 'BuildRevision = 1') 'NATS Server patched source build does not carry a republishable package revision.'
 	foreach ($kubectlScript in @('.\src\pkgs\kubectl.ps1', '.\src\pkgs\kubectl-linux.ps1')) {
 		$kubectlText = Get-Content -LiteralPath $kubectlScript -Raw
 		Assert-True ($kubectlText -match 'Initialize-TlcKubectlPackage') "$kubectlScript bypasses the shared verified source build."
