@@ -318,7 +318,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True $workflowRef.Success 'Package workflow does not pin Toolchain to an immutable commit.'
 	Assert-True ($installerText -match [regex]::Escape($workflowRef.Groups[1].Value)) 'Toolchain installer default does not match the workflow immutable commit.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
-	Assert-True ($certificationWorkflowText -match '(?m)^\s{6}- name: Install pinned Toolchain consumer\r?\n\s{8}shell: \$\{\{ matrix\.shell \}\}\s*$') 'Consumer certification installs Toolchain under a different PowerShell edition than it tests.'
+	Assert-True ($certificationWorkflowText -match "(?m)^\s{6}- name: Install pinned Toolchain consumer \(PowerShell 7\)\r?\n\s{8}if: matrix\.shell == 'pwsh'\r?\n\s{8}shell: pwsh\s*`$") 'PowerShell 7 consumer certification is not installed under PowerShell 7.'
+	Assert-True ($certificationWorkflowText -match "(?m)^\s{6}- name: Install pinned Toolchain consumer \(Windows PowerShell 5\.1\)\r?\n\s{8}if: matrix\.shell == 'powershell'\r?\n\s{8}shell: powershell\s*`$") 'Windows PowerShell 5.1 consumer certification is not installed under Windows PowerShell 5.1.'
 
 	$hardCodedRoots = @(Get-ChildItem -Path .\src\pkgs -Filter '*.ps1' -Recurse -File | Select-String -Pattern '(?i)(?<![A-Za-z0-9_])\\{1,2}pkg(?:[\\/]|[''\"])')
 	Assert-True ($hardCodedRoots.Count -eq 0) "Package scripts contain hard-coded package roots: $($hardCodedRoots.Path -join ', ')"
