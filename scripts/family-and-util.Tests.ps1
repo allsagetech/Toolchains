@@ -132,6 +132,8 @@ Describe 'Utility integrity and metadata helpers' {
 		$script:TlcKnownAssetSha256['https://example.test/tool.zip'] | Should -Be ('a' * 64)
 		Get-Variable -Name TlcKnownAssetSha256 -Scope Global -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
 		Find-LatestTag -List @([pscustomobject]@{ tag = 'v1.2.0' }, [pscustomobject]@{ tag = 'v1.10.0' }) -TagProperty tag -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$' | ForEach-Object { $_.Version.ToString() | Should -Be '1.10.0' }
+		Find-LatestTag -List @([pscustomobject]@{ tag = 'v26.7.0' }, [pscustomobject]@{ tag = 'v22.18.0' }) -TagProperty tag -TagPattern '^v(22)\.([0-9]+)\.([0-9]+)$' | ForEach-Object { $_.Version.ToString() | Should -Be '22.18.0' }
+		Find-LatestTag -List @([pscustomobject]@{ tag = 'not-a-version' }) -TagProperty tag -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$' | Should -BeNullOrEmpty
 
 		$metadata = @{ 'releases-index' = @(@{ 'channel-version' = '8.0'; 'support-phase' = 'active'; 'releases.json' = 'https://example.test/releases.json' }) }
 		$releases = @{ releases = @(@{ 'release-date' = '2026-01-01'; sdk = @{ version = '8.0.101'; files = @(@{ rid = 'win-x64'; url = 'https://example.test/sdk.zip'; hash = ('b' * 128); name = 'sdk.zip' }) } }) }
@@ -170,6 +172,14 @@ Describe 'Network and main policy branches' {
 			$env:TLC_PKG_ROOT = Join-Path ([IO.Path]::GetTempPath()) "missing-$([Guid]::NewGuid().ToString('n'))"
 			{ Invoke-DockerBuild -Tag t -PkgName p -PkgVersion 1 -Config @{} } | Should -Throw '*does not exist*'
 		} finally { $env:TLC_PKG_ROOT = $oldRoot }
+	}
+
+	It 'ignores colliding registry tags that are not package versions' {
+		$global:TlcPackageConfig = @{ Name = 'docker' }
+		Mock Get-DockerTags { @{ tags = @('docker-desktop-4.86.0', 'docker-29.7.2') } }
+		Invoke-TlcInit
+		$global:TlcPackageConfig.Latest.ToString() | Should -Be '29.7.2'
+		@($global:TlcPackageConfig.Tags).Count | Should -Be 1
 	}
 
 	It 'validates descriptor schema branches before publication' {

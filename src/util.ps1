@@ -125,12 +125,14 @@ function Set-RegistryKey($path, $name, $value) {
 }
 
 function Find-LatestTag([object[]]$List, [string]$TagProperty, [string]$TagPattern) {
-	$LatestAsset = $List[0]
+	$matching = @($List | Where-Object { $_ -and [string]$_.$TagProperty -match $TagPattern })
+	if ($matching.Count -eq 0) { return $null }
+	$LatestAsset = $matching[0]
 	$LatestVersion = [TlcSemanticVersion]::new($LatestAsset.$TagProperty, $TagPattern)
-	for ($i = 1; $i -lt $List.Count; $i += 1) {
-		$version = [TlcSemanticVersion]::new($List[$i].$TagProperty, $TagPattern)
+	for ($i = 1; $i -lt $matching.Count; $i += 1) {
+		$version = [TlcSemanticVersion]::new($matching[$i].$TagProperty, $TagPattern)
 		if ($LatestVersion.CompareTo($version) -gt 0) {
-			$LatestAsset = $List[$i]
+			$LatestAsset = $matching[$i]
 			$LatestVersion = $version
 		}
 	}

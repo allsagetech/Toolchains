@@ -45,6 +45,7 @@
 - Route push publication jobs from changed package and asset paths, use bounded representatives for shared infrastructure, and reserve automatic complete inventory sweeps for scheduled runs.
 - Normalize package `path` definitions to the case-sensitive Linux `PATH` variable during local execution.
 - Prefer GitHub's bounded latest-release endpoint, fall back across releases that contain the requested asset, and avoid oversized release-history responses.
+- Ignore nonmatching upstream and registry tags so newer Node major lines and package-name prefix collisions cannot break version discovery.
 - Remove successful Docker Hub `staging-*` tags after verified promotion and periodically clean abandoned staging tags through the tag-specific API.
 - Make Go source builds deterministic when a runner exposes multiple paths for the same executable.
 - Limit Trivy SARIF evidence to the HIGH/CRITICAL severities enforced by publication policy.

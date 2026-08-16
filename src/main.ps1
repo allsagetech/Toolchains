@@ -400,7 +400,12 @@ function Invoke-TlcInit {
 		$TlcPackageConfig.Tags = @()
 		foreach ($item in $tagList.tags) {
 			if ($item -match $matcher) {
-				$v = [TlcSemanticVersion]::new($item.Substring($namePart.length).Replace('_', '+'))
+				try {
+					$v = [TlcSemanticVersion]::new($item.Substring($namePart.length).Replace('_', '+'))
+				} catch {
+					Write-Debug "Ignoring non-version package tag '$item' for $($TlcPackageConfig.Name): $($_.Exception.Message)"
+					continue
+				}
 				$TlcPackageConfig.Tags += $v
 				if ($v.LaterThan($latest)) {
 					$latest = $v
