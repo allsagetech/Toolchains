@@ -30,47 +30,55 @@ function Invoke-CosignVerification {
 		[Parameter(Mandatory=$true)][string[]]$Arguments
 	)
 
-	for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-		Write-Host "$Description (attempt $attempt/$MaxAttempts)"
-		$startInfo = [Diagnostics.ProcessStartInfo]::new()
-		$startInfo.FileName = $cosign.Source
-		$startInfo.UseShellExecute = $false
-		$startInfo.CreateNoWindow = $true
-		foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+	$tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+	$outputFile = Join-Path $tempRoot "cosign-verification-$([guid]::NewGuid().ToString('N')).json"
+	$effectiveArguments = @($Arguments[0], '--output-file', $outputFile) + @($Arguments | Select-Object -Skip 1)
+	try {
+		for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+			Write-Host "$Description (attempt $attempt/$MaxAttempts)"
+			$startInfo = [Diagnostics.ProcessStartInfo]::new()
+			$startInfo.FileName = $cosign.Source
+			$startInfo.UseShellExecute = $false
+			$startInfo.CreateNoWindow = $true
+			foreach ($argument in $effectiveArguments) { [void]$startInfo.ArgumentList.Add($argument) }
 
-		# Inherit the runner's output handles. Redirected Process streams can keep a
-		# terminated Windows child attached indefinitely and defeat every outer timeout.
-		$process = [Diagnostics.Process]::new()
-		$process.StartInfo = $startInfo
-		try {
-			if (-not $process.Start()) { throw "could not start $($cosign.Source)" }
-			$finished = $process.WaitForExit($TimeoutSeconds * 1000)
-			if (-not $finished) {
-				try { $process.Kill() } catch { Write-Verbose "Cosign process termination reported: $($_.Exception.Message)" }
-				if (-not $process.WaitForExit(5000)) {
-					throw "$Description could not terminate its timed-out process."
+			# Keep diagnostic handles inherited while directing Cosign's potentially large
+			# verified JSON payload to disk. This avoids both redirected-stream child hangs
+			# on Windows and runner-log backpressure for large SBOM attestations on Linux.
+			$process = [Diagnostics.Process]::new()
+			$process.StartInfo = $startInfo
+			try {
+				if (-not $process.Start()) { throw "could not start $($cosign.Source)" }
+				$finished = $process.WaitForExit($TimeoutSeconds * 1000)
+				if (-not $finished) {
+					try { $process.Kill() } catch { Write-Verbose "Cosign process termination reported: $($_.Exception.Message)" }
+					if (-not $process.WaitForExit(5000)) {
+						throw "$Description could not terminate its timed-out process."
+					}
 				}
+
+				if (-not $finished) {
+					$reason = "timed out after $TimeoutSeconds seconds"
+				} elseif ($process.ExitCode -eq 0) {
+					return
+				} else {
+					$reason = "failed with exit code $($process.ExitCode)"
+				}
+			} finally {
+				$process.Dispose()
 			}
 
-			if (-not $finished) {
-				$reason = "timed out after $TimeoutSeconds seconds"
-			} elseif ($process.ExitCode -eq 0) {
-				return
-			} else {
-				$reason = "failed with exit code $($process.ExitCode)"
+			if ($attempt -lt $MaxAttempts) {
+				$delay = [math]::Pow(2, $attempt)
+				Write-Warning "$Description $reason; retrying in $delay seconds."
+				Start-Sleep -Seconds $delay
 			}
-		} finally {
-			$process.Dispose()
 		}
 
-		if ($attempt -lt $MaxAttempts) {
-			$delay = [math]::Pow(2, $attempt)
-			Write-Warning "$Description $reason; retrying in $delay seconds."
-			Start-Sleep -Seconds $delay
-		}
+		throw "$Description $reason after $MaxAttempts attempts."
+	} finally {
+		if ([IO.File]::Exists($outputFile)) { [IO.File]::Delete($outputFile) }
 	}
-
-	throw "$Description $reason after $MaxAttempts attempts."
 }
 
 $identityArguments = @(
