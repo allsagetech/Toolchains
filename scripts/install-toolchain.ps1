@@ -8,11 +8,21 @@ param(
   [string]$Repo = $(if ($env:TOOLCHAIN_REPO) { $env:TOOLCHAIN_REPO } else { 'allsagetech/toolchain' }),
   # Keep the default immutable. Maintainers may explicitly override it with
   # -Ref or TOOLCHAIN_REF when testing another release or commit.
-  [string]$Ref  = $(if ($env:TOOLCHAIN_REF) { $env:TOOLCHAIN_REF } else { '581d176d85371bbbff80d10432ebf5ad29b20435' }),
+  [string]$Ref  = $(if ($env:TOOLCHAIN_REF) { $env:TOOLCHAIN_REF } else { '' }),
   [string]$Token = $(if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { $null })
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($Ref)) {
+  $consumerPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'toolchain-consumer.json'
+  if (-not (Test-Path -LiteralPath $consumerPath -PathType Leaf)) {
+    throw "Toolchain consumer manifest does not exist: $consumerPath"
+  }
+  $consumer = Get-Content -LiteralPath $consumerPath -Raw | ConvertFrom-Json
+  $Ref = [string]$consumer.ref
+}
+if ($Ref -notmatch '^[0-9a-fA-F]{40}$') { throw 'Toolchain ref must be an immutable 40-character commit SHA.' }
 
 function Get-TempRoot {
   if ($env:RUNNER_TEMP) {
@@ -99,25 +109,28 @@ try {
 
     $moduleSrc = Split-Path -Parent $psd1.FullName
 
-    $pwshModsRoot = Join-Path $HOME "Documents\\PowerShell\\Modules"
-    $winModsRoot  = Join-Path $HOME "Documents\\WindowsPowerShell\\Modules"
+    $isWindowsHost = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)
+    if ($isWindowsHost) {
+      $pwshModsRoot = Join-Path $HOME "Documents\\PowerShell\\Modules"
+      $winModsRoot  = Join-Path $HOME "Documents\\WindowsPowerShell\\Modules"
+      $moduleRoots = @($pwshModsRoot, $winModsRoot)
+    } else {
+      $pwshModsRoot = Join-Path $HOME '.local/share/powershell/Modules'
+      $moduleRoots = @($pwshModsRoot)
+    }
 
-    $pwshMods = Join-Path $pwshModsRoot "Toolchain\\$ver"
-    $winMods  = Join-Path $winModsRoot  "Toolchain\\$ver"
-
-    New-Item -ItemType Directory -Path $pwshMods -Force | Out-Null
-    New-Item -ItemType Directory -Path $winMods  -Force | Out-Null
-
-    Copy-Item -Path (Join-Path $moduleSrc "*") -Destination $pwshMods -Recurse -Force
-    Copy-Item -Path (Join-Path $moduleSrc "*") -Destination $winMods  -Recurse -Force
+    foreach ($moduleRoot in $moduleRoots) {
+      $moduleDestination = Join-Path $moduleRoot "Toolchain\\$ver"
+      New-Item -ItemType Directory -Path $moduleDestination -Force | Out-Null
+      Copy-Item -Path (Join-Path $moduleSrc "*") -Destination $moduleDestination -Recurse -Force
+    }
 
     $sep = [System.IO.Path]::PathSeparator
-    $env:PSModulePath = "$pwshModsRoot${sep}$winModsRoot${sep}$env:PSModulePath"
-    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
-      "PSModulePath=$($env:PSModulePath)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    } else {
-      Write-Host "GITHUB_ENV is not set; PSModulePath updated for this process only."
-    }
+    $env:PSModulePath = "$(($moduleRoots -join $sep))${sep}$env:PSModulePath"
+    # Do not export the invoking host's complete PSModulePath through
+    # GITHUB_ENV. PowerShell 7 module paths can shadow Windows PowerShell 5.1
+    # inbox modules in a later step. Both editions discover the copies above
+    # through their own default per-user module roots.
 
     Import-Module Toolchain -Force
     Get-Command toolchain -ErrorAction Stop | Out-Null

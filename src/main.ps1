@@ -303,7 +303,7 @@ function Invoke-CosignSignImage([string]$tag) {
 		throw 'cosign was requested but is not available on PATH'
 	}
 	# Use a digest reference to avoid signing a mutable tag.
-	$digRef = (& docker inspect --format '{{index .RepoDigests 0}}' $tag 2>$null).Trim()
+	$digRef = (& docker inspect --format '{{index .RepoDigests 0}}' $tag 2>$null | Out-String).Trim()
 	if (-not $digRef) {
 		throw "cosign signing was requested but no immutable RepoDigest could be determined for $tag"
 	}
@@ -521,5 +521,6 @@ function Save-WorkflowMatrix {
 			$pkgs += ,$entry
 		}
 	}
-	[IO.File]::WriteAllText('.matrix', (ConvertTo-Json @{ include = $pkgs } -Depth 50 -Compress))
+	$matrixPath = Join-Path (Get-Location).Path '.matrix'
+	[IO.File]::WriteAllText($matrixPath, (ConvertTo-Json @{ include = $pkgs } -Depth 50 -Compress))
 }

@@ -13,6 +13,8 @@
 - Add canonical signed multi-platform OCI indexes while retaining platform-specific compatibility aliases.
 - Add checksum-verified Windows and Linux packages for Cosign, ORAS, Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal.
 - Add deterministic offline release rehearsals, catalog performance budgets, and automated container-base digest refresh pull requests.
+- Add automated immutable Toolchain consumer promotion with one coherent manifest/workflow pin and real Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 package-consumer tests.
+- Raise the production-code coverage gate to 80% with lifecycle, integrity, Docker publication, release pagination, cache, and subprocess regression tests.
 
 ### Security
 
@@ -52,3 +54,4 @@
 - Prefer official GitHub or machine-readable Maven metadata and fixture-test the remaining Visual Studio release parser.
 - Split shared network behavior from general package utilities and automate package-contract synchronization.
 - Split cache, definition, local-execution, and descriptor-runtime responsibilities out of the shared utility layer.
+- Write workflow matrices relative to the active repository and fail cleanly when Docker signing cannot resolve an immutable digest.

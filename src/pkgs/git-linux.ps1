@@ -48,7 +48,8 @@ function global:Install-TlcPackage {
 function global:Test-TlcPackageInstall {
 	Toolchain exec (Get-TlcPkgUri) {
 		git --version
-		curl --version
+		$curlCommand = Get-Command curl -CommandType Application -ErrorAction Stop | Select-Object -First 1
+		& $curlCommand.Source --version
 		sed --version
 	}
 }

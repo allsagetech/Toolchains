@@ -6,6 +6,15 @@ Every validation run first performs an offline release rehearsal over the comple
 
 Managed container bases are pinned by digest. A scheduled workflow resolves their canonical registry digests and opens or updates an automation pull request; `./scripts/update-container-base-digests.ps1 -Check` provides the same fail-closed verification locally.
 
+Toolchain itself is also an immutable consumer dependency. A successful
+Toolchain release dispatches the `toolchain-released` event; a weekly schedule
+provides a recovery path if dispatch credentials are unavailable. The promotion
+workflow proves that the release tag, commit, `VERSION`, and released package
+contract agree, then updates `toolchain-consumer.json` and every workflow pin in
+one pull request. That pull request must pass real package pull/load tests under
+Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 before
+merge. Package publication never consumes a mutable Toolchain branch.
+
 1. resolve and verify upstream source versions and checksums;
 2. stage package content in an isolated package root;
 3. build the OCI image once and record its digest;

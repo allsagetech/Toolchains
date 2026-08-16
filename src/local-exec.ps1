@@ -29,6 +29,30 @@ function Expand-TlcEnvValue {
 	throw 'env value must be a string or array of strings'
 }
 
+function ConvertTo-TlcHashtable {
+	param([AllowNull()][object]$InputObject)
+
+	if ($null -eq $InputObject) { return $null }
+	if ($InputObject -is [Collections.IDictionary]) {
+		$result = @{}
+		foreach ($key in $InputObject.Keys) {
+			$result[[string]$key] = ConvertTo-TlcHashtable -InputObject $InputObject[$key]
+		}
+		return $result
+	}
+	if ($InputObject.GetType().FullName -eq 'System.Management.Automation.PSCustomObject') {
+		$result = @{}
+		foreach ($property in $InputObject.PSObject.Properties) {
+			$result[$property.Name] = ConvertTo-TlcHashtable -InputObject $property.Value
+		}
+		return $result
+	}
+	if ($InputObject -is [Collections.IEnumerable] -and $InputObject -isnot [string]) {
+		return @($InputObject | ForEach-Object { ConvertTo-TlcHashtable -InputObject $_ })
+	}
+	return $InputObject
+}
+
 function Invoke-TlcLocalExec {
 	param(
 		[Parameter(Mandatory=$true)][string]$Spec,
@@ -40,7 +64,8 @@ function Invoke-TlcLocalExec {
 	$pkgRoot = Get-TlcPkgRoot
 	$definitionPath = Join-Path $pkgRoot '.tlc'
 	if (-not (Test-Path -LiteralPath $definitionPath -PathType Leaf)) { throw "toolchain definition not found: $definitionPath" }
-	$definition = (Get-Content -LiteralPath $definitionPath -Raw).Trim() | ConvertFrom-Json -AsHashtable
+	$definitionObject = (Get-Content -LiteralPath $definitionPath -Raw).Trim() | ConvertFrom-Json
+	$definition = ConvertTo-TlcHashtable -InputObject $definitionObject
 	if (-not $definition.ContainsKey('env')) { throw "toolchain definition missing required top-level 'env' object: $definitionPath" }
 	$envMap = $definition['env']
 	if ($configName) {

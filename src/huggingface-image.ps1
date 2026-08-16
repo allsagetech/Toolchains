@@ -165,7 +165,7 @@ function Install-HfModelPackage {
 	$requiresHfToken = [bool]$Model.RequiresHfToken
 	$allowPatterns = if ($Model.AllowPatterns) { [string[]]$Model.AllowPatterns } else { Get-TlcHfModelAllowPatterns }
 
-	$isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+	$isWindowsHost = Test-TlcHostIsWindows
 	if ($isWindowsHost) {
 		$TlcPackageConfig.Version = if ($TlcPackageConfig.Latest) { $TlcPackageConfig.Latest.ToString() } else { '0.0.0' }
 		$TlcPackageConfig.UpToDate = $true

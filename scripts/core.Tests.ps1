@@ -99,6 +99,9 @@ Describe 'Local execution environment' {
 		@(Expand-TlcEnvValue -Value @('${.}/a', $null, '${.}/b') -PkgRoot $script:TempRoot).Count | Should -Be 2
 		{ Expand-TlcEnvValue -Value 7 -PkgRoot $script:TempRoot } | Should -Throw '*string or array*'
 		{ Expand-TlcEnvValue -Value @('ok', 7) -PkgRoot $script:TempRoot } | Should -Throw '*only strings*'
+		ConvertTo-TlcHashtable -InputObject $null | Should -BeNullOrEmpty
+		$converted = ConvertTo-TlcHashtable -InputObject @{ nested = [pscustomobject]@{ values = @('one', 'two') } }
+		$converted.nested.values[1] | Should -Be 'two'
 	}
 }
 

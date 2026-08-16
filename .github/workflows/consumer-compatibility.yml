@@ -1,0 +1,77 @@
+# Toolchains | SPDX-License-Identifier: MPL-2.0
+name: Toolchain consumer compatibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - toolchain-consumer.json
+      - scripts/install-toolchain.ps1
+      - scripts/test-toolchain-consumer.ps1
+      - .github/workflows/consumer-compatibility.yml
+  pull_request:
+    paths:
+      - toolchain-consumer.json
+      - scripts/install-toolchain.ps1
+      - scripts/test-toolchain-consumer.ps1
+      - .github/workflows/consumer-compatibility.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  consumer:
+    name: Consumer (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-powershell-5.1
+            os: windows-2022
+            shell: powershell
+            package: 7-zip:latest
+            command: 7z
+          - name: windows-powershell-7
+            os: windows-2022
+            shell: pwsh
+            package: 7-zip:latest
+            command: 7z
+          - name: linux-powershell-7
+            os: ubuntu-22.04
+            shell: pwsh
+            package: kubectl:latest
+            command: kubectl
+    steps:
+      - name: Checkout Toolchains
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install promoted consumer with PowerShell 7
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/install-toolchain.ps1
+
+      - name: Pull, load, and inspect package under PowerShell 7
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        env:
+          CONSUMER_PACKAGE: ${{ matrix.package }}
+          CONSUMER_COMMAND: ${{ matrix.command }}
+        run: ./scripts/test-toolchain-consumer.ps1 -Package $env:CONSUMER_PACKAGE -Command $env:CONSUMER_COMMAND
+
+      - name: Pull, load, and inspect package under Windows PowerShell 5.1
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        env:
+          CONSUMER_PACKAGE: ${{ matrix.package }}
+          CONSUMER_COMMAND: ${{ matrix.command }}
+        run: ./scripts/test-toolchain-consumer.ps1 -Package $env:CONSUMER_PACKAGE -Command $env:CONSUMER_COMMAND

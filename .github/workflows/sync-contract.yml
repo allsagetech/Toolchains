@@ -3,9 +3,11 @@
 # Copyright (c) 2026 AllSageTech
 # SPDX-License-Identifier: MPL-2.0
 # #>
-name: Sync Toolchain Package Contract
+name: Promote Toolchain Release
 
 on:
+  repository_dispatch:
+    types: [toolchain-released]
   schedule:
     - cron: '31 6 * * 1'
   workflow_dispatch:
@@ -15,7 +17,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: sync-toolchain-package-contract
+  group: promote-toolchain-release
   cancel-in-progress: false
 
 jobs:
@@ -28,41 +30,82 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download latest immutable Toolchain contract
+      - name: Resolve immutable Toolchain release
+        id: release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_REF: ${{ github.event.client_payload.ref }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -eq 'repository_dispatch') {
+            $ref = [string]$env:DISPATCH_REF
+            $version = ([string]$env:DISPATCH_VERSION).TrimStart('v')
+            $tag = [string]$env:DISPATCH_TAG
+          } else {
+            $release = gh release view --repo allsagetech/Toolchain --json tagName | ConvertFrom-Json
+            $tag = [string]$release.tagName
+            $version = $tag.TrimStart('v')
+            $ref = (gh api "repos/allsagetech/Toolchain/commits/$tag" --jq .sha | Out-String).Trim()
+          }
+          if ($ref -notmatch '^[0-9a-fA-F]{40}$' -or $tag -ne "v$version") {
+            throw 'Toolchain promotion payload is not an immutable versioned release.'
+          }
+          $tagRef = (gh api "repos/allsagetech/Toolchain/commits/$tag" --jq .sha | Out-String).Trim()
+          if ($tagRef -ine $ref) { throw "Toolchain release tag $tag resolves to $tagRef, not $ref." }
+          $encodedVersion = (gh api "repos/allsagetech/Toolchain/contents/VERSION?ref=$ref" --jq .content | Out-String).Trim()
+          $sourceVersion = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($encodedVersion -replace '\s',''))).Trim()
+          if ($sourceVersion -ne $version) { throw "Toolchain VERSION $sourceVersion does not match release $tag." }
+          "ref=$($ref.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Update consumer and package contract
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLCHAIN_REF: ${{ steps.release.outputs.ref }}
+          TOOLCHAIN_VERSION: ${{ steps.release.outputs.version }}
+          TOOLCHAIN_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\scripts\update-toolchain-consumer.ps1 -Ref $env:TOOLCHAIN_REF -Version $env:TOOLCHAIN_VERSION
           $download = Join-Path $env:RUNNER_TEMP 'toolchain-contract-download'
           $source = Join-Path $env:RUNNER_TEMP 'toolchain-contract'
           New-Item -ItemType Directory -Path $download,$source -Force | Out-Null
-          gh release download --repo allsagetech/Toolchain --pattern toolchain-package-spec-v1.zip --dir $download --clobber
-          if ($LASTEXITCODE -ne 0) { throw 'Could not download the latest Toolchain package contract release artifact.' }
+          gh release download $env:TOOLCHAIN_TAG --repo allsagetech/Toolchain --pattern toolchain-package-spec-v1.zip --dir $download --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the promoted Toolchain package contract artifact.' }
           Expand-Archive -LiteralPath (Join-Path $download 'toolchain-package-spec-v1.zip') -DestinationPath $source -Force
           .\scripts\update-package-spec.ps1 -SourceRoot $source
 
-      - name: Open synchronization pull request
+      - name: Validate promoted consumer contract
+        shell: pwsh
+        run: ./scripts/test.ps1 -CoverageTarget 0
+
+      - name: Open promotion pull request
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TOOLCHAIN_VERSION: ${{ steps.release.outputs.version }}
+          TOOLCHAIN_REF: ${{ steps.release.outputs.ref }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (git status --porcelain -- schema)) {
-            Write-Host 'The vendored package contract is current.'
+          if (-not (git status --porcelain)) {
+            Write-Host 'The Toolchain consumer and package contract are current.'
             return
           }
-          $version = (Get-Content -LiteralPath schema/PACKAGE_SPEC_VERSION -Raw).Trim()
-          $branch = "automation/package-spec-v$version"
+          $branch = "automation/toolchain-v$env:TOOLCHAIN_VERSION"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -B $branch
-          git add -- schema
-          git commit -m "Sync Toolchain package contract v$version"
+          git add -- toolchain-consumer.json schema .github/workflows/build-push.yml .github/workflows/certify-published.yml
+          git commit -m "Promote Toolchain v$env:TOOLCHAIN_VERSION consumer"
           git push --force-with-lease --set-upstream origin $branch
           $existing = gh pr list --head $branch --state open --json url --jq '.[0].url'
           if ($existing) {
-            Write-Host "Updated existing contract PR: $existing"
+            Write-Host "Updated existing promotion PR: $existing"
           } else {
-            gh pr create --base main --head $branch --title "Sync Toolchain package contract v$version" --body "Updates the vendored package-definition schema and fixtures from the latest immutable Toolchain release artifact."
+            gh pr create --base main --head $branch --title "Promote Toolchain v$env:TOOLCHAIN_VERSION consumer" --body "Promotes immutable Toolchain commit $env:TOOLCHAIN_REF and synchronizes its released package-definition contract. The pull request must pass PowerShell 5.1, PowerShell 7, and Linux consumer tests before merge."
           }

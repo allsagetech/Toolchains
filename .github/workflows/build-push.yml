@@ -38,7 +38,7 @@ env:
   # Immutable Toolchain consumer used for package execution and local image contracts.
   # Update only after the corresponding Toolchain commit has passed its release gates.
   TOOLCHAIN_REPO: allsagetech/toolchain
-  TOOLCHAIN_REF: 581d176d85371bbbff80d10432ebf5ad29b20435
+  TOOLCHAIN_REF: c484ec0579dc90c88bcd5da7f4830386bb0f87bd
   TLC_DOCKER_REPO: ${{ vars.TLC_DOCKER_REPO || 'allsagetech/toolchains' }}
 
 jobs:
@@ -391,7 +391,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: allsagetech/toolchain
-          ref: f6088e16872964cc8b5f4618a8e1bc0596822e32
+          ref: ${{ env.TOOLCHAIN_REF }}
           path: .ci/toolchain-contract
           persist-credentials: false
 
@@ -599,7 +599,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: allsagetech/toolchain
-          ref: f6088e16872964cc8b5f4618a8e1bc0596822e32
+          ref: ${{ env.TOOLCHAIN_REF }}
           path: .ci/toolchain-contract
           persist-credentials: false
 

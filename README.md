@@ -9,6 +9,15 @@ Run the complete local quality gate (Pester, static analysis, contract fixtures,
 pwsh -NoLogo -NoProfile -File ./scripts/test.ps1
 ```
 
+The gate measures the complete production helper set and enforces at least 80%
+instruction coverage.
+
+Toolchain consumption is pinned coherently in `toolchain-consumer.json`. Every
+promoted Toolchain release updates that manifest, the build workflow, and the
+published-package certification workflow to the same immutable commit. The
+consumer compatibility workflow then pulls and loads a real package under
+Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7.
+
 Package authors should start with [`doc/package-authoring.md`](doc/package-authoring.md). The generated [`PACKAGE_INVENTORY.md`](PACKAGE_INVENTORY.md) lists every descriptor, platform, tier, and publication state. Release and trust boundaries are documented in [`doc/release-process.md`](doc/release-process.md) and [`doc/architecture.md`](doc/architecture.md).
 
 ## Licensing note

@@ -313,11 +313,30 @@ function Test-ProductionReadinessPolicies {
 	$installerText = Get-Content -LiteralPath .\scripts\install-toolchain.ps1 -Raw
 	$workflowText = Get-Content -LiteralPath .\.github\workflows\build-push.yml -Raw
 	$certificationWorkflowText = Get-Content -LiteralPath .\.github\workflows\certify-published.yml -Raw
+	$promotionWorkflowText = Get-Content -LiteralPath .\.github\workflows\sync-contract.yml -Raw
+	$consumerWorkflowText = Get-Content -LiteralPath .\.github\workflows\consumer-compatibility.yml -Raw
+	$consumer = Get-Content -LiteralPath .\toolchain-consumer.json -Raw | ConvertFrom-Json
 	$runtimeText = Get-Content -LiteralPath .\src\package-runtime.ps1 -Raw
 	$workflowRef = [regex]::Match($workflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
+	$certificationRef = [regex]::Match($certificationWorkflowText, '(?m)^\s*TOOLCHAIN_REF:\s*([0-9a-f]{40})\s*$')
 	Assert-True $workflowRef.Success 'Package workflow does not pin Toolchain to an immutable commit.'
-	Assert-True ($installerText -match [regex]::Escape($workflowRef.Groups[1].Value)) 'Toolchain installer default does not match the workflow immutable commit.'
+	Assert-True $certificationRef.Success 'Certification workflow does not pin Toolchain to an immutable commit.'
+	Assert-True ([int]$consumer.schemaVersion -eq 1) 'Toolchain consumer manifest has an unsupported schema.'
+	Assert-True ([string]$consumer.ref -match '^[0-9a-f]{40}$') 'Toolchain consumer manifest does not pin an immutable commit.'
+	Assert-True ([string]$consumer.ref -eq $workflowRef.Groups[1].Value) 'Package workflow pin does not match toolchain-consumer.json.'
+	Assert-True ([string]$consumer.ref -eq $certificationRef.Groups[1].Value) 'Certification workflow pin does not match toolchain-consumer.json.'
+	Assert-True ($installerText -match 'toolchain-consumer\.json') 'Toolchain installer does not read the promoted consumer manifest.'
 	Assert-True ($installerText -notmatch "else \{ 'pipeline' \}") 'Toolchain installer still defaults to the mutable pipeline branch.'
+	Assert-True ($installerText -notmatch '"PSModulePath=\$\(\$env:PSModulePath\)"\s*\|\s*Out-File') 'Toolchain installer exports one PowerShell edition''s module path into later consumer shells.'
+	Assert-True ($workflowText -notmatch 'ref:\s*f6088e16872964cc8b5f4618a8e1bc0596822e32') 'Package contracts still use the legacy Toolchain 2.0.11 source pin.'
+	Assert-True ($workflowText -match 'repository:\s*allsagetech/toolchain\s+ref:\s*\$\{\{ env\.TOOLCHAIN_REF \}\}') 'Package contract source does not use the promoted Toolchain consumer ref.'
+	Assert-True ($promotionWorkflowText -match 'update-toolchain-consumer\.ps1') 'Toolchain release synchronization does not update the consumer pin.'
+	Assert-True ($promotionWorkflowText -match 'repository_dispatch:\s+types:\s*\[toolchain-released\]') 'Toolchain releases cannot trigger consumer promotion.'
+	foreach ($consumerName in @('windows-powershell-5.1','windows-powershell-7','linux-powershell-7')) {
+		Assert-True ($consumerWorkflowText -match [regex]::Escape("name: $consumerName")) "Consumer compatibility matrix does not test $consumerName."
+	}
+	Assert-True ($consumerWorkflowText -match 'Install promoted consumer with PowerShell 7[\s\S]+Pull, load, and inspect package under Windows PowerShell 5\.1') 'Consumer compatibility does not exercise a PowerShell 7 installer to Windows PowerShell 5.1 handoff.'
+	Assert-True ($consumerWorkflowText -match 'test-toolchain-consumer\.ps1') 'Consumer compatibility does not pull and load a real published package.'
 	Assert-True ($certificationWorkflowText -match "(?m)^\s{6}- name: Install pinned Toolchain consumer \(PowerShell 7\)\r?\n\s{8}if: matrix\.shell == 'pwsh'\r?\n\s{8}shell: pwsh\s*`$") 'PowerShell 7 consumer certification is not installed under PowerShell 7.'
 	Assert-True ($certificationWorkflowText -match "(?m)^\s{6}- name: Install pinned Toolchain consumer \(Windows PowerShell 5\.1\)\r?\n\s{8}if: matrix\.shell == 'powershell'\r?\n\s{8}shell: powershell\s*`$") 'Windows PowerShell 5.1 consumer certification is not installed under Windows PowerShell 5.1.'
 

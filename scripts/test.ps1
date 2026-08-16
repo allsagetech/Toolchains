@@ -7,7 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 [CmdletBinding()]
 param(
 	[ValidateRange(0, 100)]
-	[double]$CoverageTarget = 50
+	[double]$CoverageTarget = 80
 )
 
 $ErrorActionPreference = 'Stop'
