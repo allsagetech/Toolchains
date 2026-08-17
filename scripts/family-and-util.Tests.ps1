@@ -51,11 +51,14 @@ Describe 'Package family lifecycle helpers' {
 		Mock Install-BuildTool {}
 		Mock Get-ChildItem { [pscustomobject]@{ DirectoryName = (Join-Path $env:TLC_PKG_ROOT 'node') } }
 		Mock Write-TlcVars {}
+		Mock Toolchain {}
 		Install-TlcPackage
+		Test-TlcPackageInstall
 		$global:TlcPackageConfig.Version | Should -Be '22.3.1'
 		$global:TlcPackageConfig.UpToDate | Should -BeFalse
 		Should -Invoke Install-BuildTool -Times 1
 		Should -Invoke Write-TlcVars -Times 1
+		Should -Invoke Toolchain -Times 1 -Exactly
 	}
 
 	It 'revisions Node packages and installs each pinned npm security overlay' {
@@ -71,13 +74,26 @@ Describe 'Package family lifecycle helpers' {
 		Mock Get-ChildItem { [pscustomobject]@{ DirectoryName = (Join-Path $env:TLC_PKG_ROOT 'node') } }
 		Mock Install-TlcPinnedNpmArchive {}
 		Mock Write-TlcVars {}
+		Mock Toolchain {}
 		Install-TlcPackage
+		Test-TlcPackageInstall
 		$global:TlcPackageConfig.Version | Should -Be '22.3.1+1'
 		$global:TlcPackageConfig.UpToDate | Should -BeFalse
 		Should -Invoke Install-TlcPinnedNpmArchive -Times 3 -Exactly
 		Should -Invoke Install-TlcPinnedNpmArchive -Times 1 -Exactly -ParameterFilter { $Name -eq 'npm' -and $Version -eq '12.0.2' }
 		Should -Invoke Install-TlcPinnedNpmArchive -Times 1 -Exactly -ParameterFilter { $Name -eq 'brace-expansion' -and $Version -eq '5.0.9' }
 		Should -Invoke Install-TlcPinnedNpmArchive -Times 1 -Exactly -ParameterFilter { $Name -eq 'ip-address' -and $Version -eq '10.5.0' }
+		Should -Invoke Toolchain -Times 1 -Exactly
+	}
+
+	It 'rejects incomplete Node hardening metadata and archives without node.exe' {
+		{ Initialize-TlcNodePackage -Major 22 -NpmVersion '12.0.2' } | Should -Throw '*must be provided together*'
+		Initialize-TlcNodePackage -Major 22
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('21.0.0')
+		Mock Get-GitHubTag { @{ name = 'v22.3.1'; Version = [TlcSemanticVersion]::new('22.3.1') } }
+		Mock Install-BuildTool {}
+		Mock Get-ChildItem { $null }
+		{ Install-TlcPackage } | Should -Throw '*did not contain node.exe*'
 	}
 
 	It 'installs a registry-integrity-verified npm archive inside the package root' {
@@ -98,6 +114,27 @@ Describe 'Package family lifecycle helpers' {
 		Should -Invoke Invoke-TlcWebRequest -Times 1 -Exactly -ParameterFilter {
 			$Uri -eq 'https://registry.npmjs.org/npm/-/npm-12.0.2.tgz' -and
 			$ExpectedHashAlgorithm -eq 'SHA512' -and $ExpectedHash -eq ('a' * 128)
+		}
+	}
+
+	It 'installs a scoped npm archive using the registry tarball basename' {
+		$global:TlcFixtureTarEntries = @('package/package.json', 'package/dist/index.js')
+		$global:TlcFixtureTarDetails = @('-rw-r--r-- package/package.json', '-rw-r--r-- package/dist/index.js')
+		$global:TlcFixtureTarName = '@github/copilot'
+		$global:TlcFixtureTarVersion = '1.0.43'
+		Mock Get-TlcApplicationPath { 'Invoke-TlcFixtureTar' } -ParameterFilter { $Name -eq 'tar' }
+		Mock Invoke-TlcWebRequest {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutFile) -Force | Out-Null
+			Set-Content -LiteralPath $OutFile -Value 'fixture' -NoNewline
+		}
+		$destination = Join-Path $env:TLC_PKG_ROOT 'app\node_modules\@github\copilot'
+		Install-TlcPinnedNpmArchive -Name '@github/copilot' -Version '1.0.43' -ExpectedSha512 ('b' * 128) -Destination $destination
+		$manifest = Get-Content -LiteralPath (Join-Path $destination 'package.json') -Raw | ConvertFrom-Json
+		$manifest.name | Should -BeExactly '@github/copilot'
+		$manifest.version | Should -BeExactly '1.0.43'
+		Should -Invoke Invoke-TlcWebRequest -Times 1 -Exactly -ParameterFilter {
+			$Uri -eq 'https://registry.npmjs.org/%40github%2Fcopilot/-/copilot-1.0.43.tgz' -and
+			$ExpectedHashAlgorithm -eq 'SHA512' -and $ExpectedHash -eq ('b' * 128)
 		}
 	}
 
@@ -481,6 +518,11 @@ Describe 'Utility integrity and metadata helpers' {
 		$asset = Get-DotNetReleaseAsset -Rid 'win-x64' -Product sdk -Extension '.zip'
 		$asset.VersionText | Should -Be '8.0.101'
 		$asset.HashAlgorithm | Should -Be 'SHA512'
+
+		$releases.releases[0].runtime = @{ version = '8.0.5'; files = @(@{ rid = 'win-x64'; url = '::::.zip'; hash = ('c' * 128) }) }
+		$runtimeAsset = Get-DotNetReleaseAsset -Rid 'win-x64' -Product runtime -Extension '.zip'
+		$runtimeAsset.Name | Should -Be 'dotnet-runtime-8.0.5-win-x64.zip'
+		$runtimeAsset.VersionText | Should -Be '8.0.5'
 	}
 }
 
