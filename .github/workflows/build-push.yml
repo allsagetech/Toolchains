@@ -1301,7 +1301,9 @@ jobs:
           }
           $scanResultsPath = Join-Path $directory 'scan-results.json'
           ./scripts/merge-package-health-scan-results.ps1 -PriorHealthPath $priorPath -EvidenceRoot $evidenceRoot -OutputPath $scanResultsPath
-          ./scripts/new-package-health-catalog.ps1 -OutputPath (Join-Path $directory 'catalog.json') -Repository $env:TLC_DOCKER_REPO -ScanResultsPath $scanResultsPath
+          $catalogPath = Join-Path $directory 'catalog.json'
+          ./scripts/new-package-health-catalog.ps1 -OutputPath $catalogPath -Repository $env:TLC_DOCKER_REPO -ScanResultsPath $scanResultsPath
+          ./scripts/add-package-health-history.ps1 -CatalogPath $catalogPath -PriorHealthPath $priorPath
       - name: Upload health catalog plan
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

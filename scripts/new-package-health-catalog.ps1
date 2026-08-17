@@ -80,6 +80,7 @@ $packages = foreach ($group in $records | Group-Object canonicalName | Sort-Obje
 		platforms = @($members.platform | Sort-Object -Unique)
 		aliases = @($members.name | Where-Object { $_ -ne $group.Name } | Sort-Object -Unique)
 		lastScannedAt = ($members.lastScannedAt | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1)
+		lastCleanScannedAt = ($available.lastScannedAt | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1)
 		digest = ($members.digest | Where-Object { $_ } | Select-Object -First 1)
 		upstream = ($members.upstream | Where-Object { $_ } | Sort-Object -Unique | Select-Object -First 1)
 	}

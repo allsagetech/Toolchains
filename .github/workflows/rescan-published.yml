@@ -159,6 +159,7 @@ jobs:
           [IO.File]::WriteAllText((Join-Path (Get-Location) 'prior-health.json'), ([string]$json), [Text.UTF8Encoding]::new($false))
           ./scripts/merge-package-health-scan-results.ps1 -PriorHealthPath prior-health.json -EvidenceRoot evidence -OutputPath scan-results.json -CurrentResultsAuthoritative
           ./scripts/new-package-health-catalog.ps1 -OutputPath catalog.json -Repository $env:TLC_DOCKER_REPO -ScanResultsPath scan-results.json
+          ./scripts/add-package-health-history.ps1 -CatalogPath catalog.json -PriorHealthPath prior-health.json
       - name: Upload health catalog plan
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

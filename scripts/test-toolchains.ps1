@@ -345,8 +345,11 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($monitorWorkflowText -match '\.has_issues' -and $monitorWorkflowText -match 'GitHub Issues are disabled') 'Health monitoring cannot operate when repository issues are disabled.'
 	Assert-True ($monitorWorkflowText -match 'Enforce healthy catalog[\s\S]+if:\s*\$\{\{\s*always\(\)') 'Health monitoring can skip its fail-closed catalog gate after an alerting error.'
 	Assert-True ($monitorWorkflowText -match 'gh issue (create|edit)') 'Health monitoring does not synchronize an alert issue.'
+	Assert-True ($monitorWorkflowText -match 'MaxRemediationAgeHours\s*=\s*168') 'Health monitoring does not enforce the seven-day remediation SLO.'
+	Assert-True ($monitorWorkflowText -match 'Select-Object -Skip 1' -and $monitorWorkflowText -match 'Consolidated into') 'Health monitoring does not consolidate duplicate alert issues.'
 	Assert-True ($monitorWorkflowText -match 'retention-days:\s*90') 'Health monitoring evidence is not retained for 90 days.'
 	Assert-True ($workflowText -match 'merge-package-health-scan-results\.ps1' -and $workflowText -match '\.health\.json') 'Package publication does not preserve prior scan freshness and merge current scan evidence.'
+	Assert-True ($workflowText -match 'add-package-health-history\.ps1' -and $rescanWorkflowText -match 'add-package-health-history\.ps1') 'Package publication and rescans do not persist package-health state history.'
 	Assert-True ($rollbackWorkflowText -match "confirmation == 'ROLLBACK'") 'Package rollback lacks explicit operator confirmation.'
 	foreach ($evidence in @("cosign @Arguments", "'spdxjson'", "'slsaprovenance'", 'imagetools create', 'AliasTag must be')) {
 		Assert-True ($rollbackScriptText -match [regex]::Escape($evidence)) "Package rollback is missing evidence gate: $evidence"

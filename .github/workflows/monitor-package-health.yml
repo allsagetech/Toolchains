@@ -80,6 +80,7 @@ jobs:
             JsonOutputPath = 'evidence/report.json'
             MarkdownOutputPath = 'evidence/report.md'
             MaxScanAgeHours = 192
+            MaxRemediationAgeHours = 168
           }
           if (Test-Path -LiteralPath evidence/fetch-error.txt) { $params.SourceErrorPath = 'evidence/fetch-error.txt' }
           $report = ./scripts/test-package-health-monitor.ps1 @params
@@ -111,6 +112,10 @@ jobs:
           } elseif ($issues.Count -gt 0) {
             gh issue edit $issues[0].number --body-file evidence/report.md
             if ($LASTEXITCODE -ne 0) { throw "Could not update package health alert issue $($issues[0].number)." }
+            foreach ($duplicate in @($issues | Select-Object -Skip 1)) {
+              gh issue close $duplicate.number --comment "Consolidated into #$($issues[0].number), the canonical package-health alert."
+              if ($LASTEXITCODE -ne 0) { throw "Could not close duplicate package health alert issue $($duplicate.number)." }
+            }
           } else {
             gh issue create --title $title --body-file evidence/report.md
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the package health alert issue.' }

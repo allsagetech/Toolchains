@@ -140,9 +140,11 @@ PowerShell 7, and scheduled local-cluster smoke tests.
 The package-health monitor runs daily and after every scheduled rescan. It reads
 the catalog through Toolchain's Cosign-verifying path, rejects live-registry
 fallbacks, non-available packages, missing durable versions, and scan evidence
-older than eight days. It retains a machine-readable report for 90 days and
-opens or updates a single `[monitor] Package health alert` issue until a healthy
-run closes it automatically.
+older than eight days. Signed catalogs retain state-transition and last-clean
+scan timestamps; the monitor reports remediation age, time quarantined, and a
+seven-day remediation SLO. It retains a machine-readable report for 90 days,
+opens or updates one `[monitor] Package health alert`, consolidates duplicates,
+and closes the alert automatically after recovery.
 
 The catalog additionally contains Windows/Linux packages for Cosign, ORAS,
 Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal. Shared

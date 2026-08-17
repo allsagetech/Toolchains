@@ -9,6 +9,7 @@ Describe 'Package health monitor' {
 		$script:markdown = Join-Path $script:root 'report.md'
 		$script:monitor = Join-Path $PSScriptRoot 'test-package-health-monitor.ps1'
 		$script:merge = Join-Path $PSScriptRoot 'merge-package-health-scan-results.ps1'
+		$script:history = Join-Path $PSScriptRoot 'add-package-health-history.ps1'
 		$script:now = [datetime]'2026-08-16T12:00:00Z'
 	}
 
@@ -56,7 +57,63 @@ Describe 'Package health monitor' {
 		$report = & $script:monitor -InputPath $script:input -JsonOutputPath $script:json -MarkdownOutputPath $script:markdown -NowUtc $script:now
 		$report.healthy | Should -BeTrue
 		$report.problemCount | Should -Be 0
+		$report.remediationSlo.compliancePercent | Should -Be 100
+		$report.metrics[0].lastCleanScannedAt | Should -Be '2026-08-16T10:00:00.0000000Z'
 		Test-Path -LiteralPath $script:markdown | Should -BeTrue
+	}
+
+	It 'preserves state history, records transitions, and updates clean scans' {
+		$catalog = Join-Path $script:root 'catalog.json'
+		$prior = Join-Path $script:root 'prior-health.json'
+		[ordered]@{
+			schemaVersion = 1
+			generatedAt = '2026-08-16T12:00:00Z'
+			repository = 'owner/repo'
+			packages = @(
+				[ordered]@{ name='steady'; state='scan-blocked'; lastScannedAt='2026-08-16T10:00:00Z' },
+				[ordered]@{ name='new-block'; state='scan-blocked'; lastScannedAt='2026-08-16T10:00:00Z' },
+				[ordered]@{ name='recovered'; state='available'; lastScannedAt='2026-08-16T10:00:00Z' }
+			)
+		} | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $catalog
+		@(
+			[ordered]@{ Name='steady'; State='scan-blocked'; LastScannedAt='2026-08-15T10:00:00Z'; StateSince='2026-08-12T00:00:00Z'; LastCleanScannedAt='2026-08-08T00:00:00Z' },
+			[ordered]@{ Name='new-block'; State='available'; LastScannedAt='2026-08-10T00:00:00Z' },
+			[ordered]@{ Name='recovered'; State='scan-blocked'; LastScannedAt='2026-08-15T00:00:00Z'; StateSince='2026-08-14T00:00:00Z'; LastCleanScannedAt='2026-08-07T00:00:00Z' }
+		) | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $prior
+
+		& $script:history -CatalogPath $catalog -PriorHealthPath $prior
+		$result = Get-Content -LiteralPath $catalog -Raw | ConvertFrom-Json
+		$steady = @($result.packages | Where-Object name -eq 'steady')[0]
+		$newBlock = @($result.packages | Where-Object name -eq 'new-block')[0]
+		$recovered = @($result.packages | Where-Object name -eq 'recovered')[0]
+		([datetime]$steady.stateSince).ToUniversalTime().ToString('o') | Should -Be '2026-08-12T00:00:00.0000000Z'
+		([datetime]$steady.lastCleanScannedAt).ToUniversalTime().ToString('o') | Should -Be '2026-08-08T00:00:00.0000000Z'
+		([datetime]$newBlock.stateSince).ToUniversalTime().ToString('o') | Should -Be '2026-08-16T10:00:00.0000000Z'
+		([datetime]$newBlock.lastCleanScannedAt).ToUniversalTime().ToString('o') | Should -Be '2026-08-10T00:00:00.0000000Z'
+		([datetime]$recovered.stateSince).ToUniversalTime().ToString('o') | Should -Be '2026-08-16T10:00:00.0000000Z'
+		([datetime]$recovered.lastCleanScannedAt).ToUniversalTime().ToString('o') | Should -Be '2026-08-16T10:00:00.0000000Z'
+	}
+
+	It 'measures quarantine duration and reports remediation SLO breaches' {
+		@([ordered]@{
+			Name='quarantined-demo'
+			State='quarantined'
+			Reason='Unverified upstream input'
+			Versions=@()
+			LastScannedAt='2026-08-16T10:00:00Z'
+			StateSince='2026-08-14T00:00:00Z'
+			LastCleanScannedAt='2026-08-01T00:00:00Z'
+		}) | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:input
+
+		$report = & $script:monitor -InputPath $script:input -JsonOutputPath $script:json -MarkdownOutputPath $script:markdown -NowUtc $script:now -MaxRemediationAgeHours 48
+		$report.healthy | Should -BeFalse
+		$report.remediationSlo.breachCount | Should -Be 1
+		$report.remediationSlo.compliancePercent | Should -Be 0
+		$report.problems.category | Should -Contain 'RemediationSLO'
+		$report.metrics[0].remediationAgeHours | Should -Be 60
+		$report.metrics[0].quarantinedHours | Should -Be 60
+		$report.metrics[0].lastCleanScanAgeHours | Should -Be 372
+		(Get-Content -LiteralPath $script:markdown -Raw) | Should -Match 'quarantined-demo.*60 h.*breached'
 	}
 
 	It 'reports fallback, unsafe state, missing versions, stale scans, and duplicates' {

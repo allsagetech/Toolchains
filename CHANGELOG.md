@@ -16,6 +16,7 @@
 - Add automated immutable Toolchain consumer promotion with one coherent manifest/workflow pin and real Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 package-consumer tests.
 - Raise the production-code coverage gate to 85% with lifecycle, integrity, Docker publication, release pagination, cache, subprocess, model-install, and isolated-runtime regression tests.
 - Add daily and post-rescan signed package-health monitoring with retained reports and automatically managed GitHub alert issues.
+- Add persistent health-state history, last-clean-scan and quarantine-duration metrics, a seven-day remediation SLO, and duplicate alert consolidation.
 - Add signature-, SBOM-, and provenance-verified package alias rollback plus three-platform Toolchain consumer rollback.
 
 ### Security
