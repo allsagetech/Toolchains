@@ -112,13 +112,16 @@ Describe 'Package descriptor isolation and policy' {
 		$script:TempRoot = Join-Path ([IO.Path]::GetTempPath()) "toolchains-runtime-$([Guid]::NewGuid().ToString('n'))"
 		New-Item -ItemType Directory -Path $script:TempRoot -Force | Out-Null
 		$script:OldPkgRoot = $env:TLC_PKG_ROOT
+		$script:OldRuntimeEvidence = $env:TLC_RUNTIME_EVIDENCE
 		$env:TLC_PKG_ROOT = Join-Path $script:TempRoot 'pkg'
+		$env:TLC_RUNTIME_EVIDENCE = Join-Path $script:TempRoot 'runtime-evidence.json'
 		New-Item -ItemType Directory -Path $env:TLC_PKG_ROOT -Force | Out-Null
 	}
 
 	AfterEach {
 		Clear-TlcPackageScript
 		$env:TLC_PKG_ROOT = $script:OldPkgRoot
+		$env:TLC_RUNTIME_EVIDENCE = $script:OldRuntimeEvidence
 		Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 	}
 
@@ -138,12 +141,50 @@ Describe 'Package descriptor isolation and policy' {
 $global:TlcPackageConfig = @{ Name = 'fixture'; Nonce = $true; Version = '1.2.3'; UpToDate = $false }
 function global:Install-TlcPackage { Write-TlcVars @{ env = @{ FIXTURE = '${.}/bin' } }; $global:TlcPackageConfig.UpToDate = $false }
 function global:Test-TlcPackageInstall { if (-not (Test-Path (Join-Path (Get-TlcPkgRoot) '.tlc'))) { throw 'missing definition' } }
+function global:Invoke-DockerPush {
+	param($Name, $Version, $Config)
+	[IO.File]::WriteAllText($env:TLC_RUNTIME_EVIDENCE, (@{ Name = $Name; Version = $Version; ConfigName = $Config.Name } | ConvertTo-Json -Compress))
+}
 '@)
-		$config = Invoke-TlcPackageLifecycle -Path $descriptor -Force
+		$config = Invoke-TlcPackageLifecycle -Path $descriptor -Force -Publish
 		$config.Name | Should -Be 'fixture'
 		$config.UpToDate | Should -BeFalse
 		Test-Path -LiteralPath (Join-Path $env:TLC_PKG_ROOT '.tlc') | Should -BeTrue
+		$evidence = Get-Content -LiteralPath $env:TLC_RUNTIME_EVIDENCE -Raw | ConvertFrom-Json
+		$evidence.Name | Should -Be 'fixture'
+		$evidence.Version | Should -Be '1.2.3'
+		$evidence.ConfigName | Should -Be 'fixture'
 		Get-Variable TlcPackageConfig -Scope Global -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+	}
+
+	It 'passes immutable image build inputs through the isolated runtime' {
+		$descriptor = Join-Path $script:TempRoot 'image-fixture.ps1'
+		[IO.File]::WriteAllText($descriptor, @'
+$global:TlcPackageConfig = @{ Name = 'descriptor-name'; Dockerfile = 'Dockerfile.layered' }
+function global:Install-TlcPackage {}
+function global:Test-TlcPackageInstall {}
+function global:Invoke-DockerBuild {
+	param($Tag, $PkgName, $PkgVersion, $DockerfileName, $Config)
+	[IO.File]::WriteAllText($env:TLC_RUNTIME_EVIDENCE, (@{
+		Tag = $Tag
+		PkgName = $PkgName
+		PkgVersion = $PkgVersion
+		DockerfileName = $DockerfileName
+		ConfigName = $Config.Name
+		ConfigVersion = $Config.Version
+	} | ConvertTo-Json -Compress))
+}
+'@)
+
+		$imageRef = 'ghcr.io/allsagetech/fixture@sha256:0123456789abcdef'
+		Invoke-TlcPackageImageBuild -Path $descriptor -ImageRef $imageRef -Name 'runtime-name' -Version '9.8.7'
+		$evidence = Get-Content -LiteralPath $env:TLC_RUNTIME_EVIDENCE -Raw | ConvertFrom-Json
+		$evidence.Tag | Should -Be $imageRef
+		$evidence.PkgName | Should -Be 'runtime-name'
+		$evidence.PkgVersion | Should -Be '9.8.7'
+		$evidence.DockerfileName | Should -Be 'Dockerfile.layered'
+		$evidence.ConfigName | Should -Be 'runtime-name'
+		$evidence.ConfigVersion | Should -Be '9.8.7'
 	}
 
 	It 'closes failed runtimes and validates publication policy branches' {

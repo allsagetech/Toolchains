@@ -14,7 +14,7 @@
 - Add checksum-verified Windows and Linux packages for Cosign, ORAS, Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal.
 - Add deterministic offline release rehearsals, catalog performance budgets, and automated container-base digest refresh pull requests.
 - Add automated immutable Toolchain consumer promotion with one coherent manifest/workflow pin and real Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 package-consumer tests.
-- Raise the production-code coverage gate to 80% with lifecycle, integrity, Docker publication, release pagination, cache, and subprocess regression tests.
+- Raise the production-code coverage gate to 85% with lifecycle, integrity, Docker publication, release pagination, cache, subprocess, model-install, and isolated-runtime regression tests.
 - Add daily and post-rescan signed package-health monitoring with retained reports and automatically managed GitHub alert issues.
 - Add signature-, SBOM-, and provenance-verified package alias rollback plus three-platform Toolchain consumer rollback.
 

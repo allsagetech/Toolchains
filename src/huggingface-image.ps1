@@ -220,25 +220,19 @@ function Install-HfModelPackage {
 		New-Item -ItemType Directory -Path $path -Force | Out-Null
 	}
 
-	& $python.Source -m venv $venvRoot
-	if ($LASTEXITCODE -ne 0) {
-		throw "python venv creation failed with exit code $LASTEXITCODE."
-	}
+	Invoke-TlcNativeCommand -FilePath $python.Source -ArgumentList @('-m', 'venv', $venvRoot) `
+		-FailureMessage 'python venv creation failed'
 
 	$venvPython = Join-Path $venvRoot 'bin/python'
 	if (-not (Test-Path -LiteralPath $venvPython)) {
 		throw "Could not find Python executable in virtual environment: $venvPython"
 	}
 
-	& $venvPython -m pip install --upgrade pip
-	if ($LASTEXITCODE -ne 0) {
-		throw "pip upgrade failed with exit code $LASTEXITCODE."
-	}
+	Invoke-TlcNativeCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'install', '--upgrade', 'pip') `
+		-FailureMessage 'pip upgrade failed'
 
-	& $venvPython -m pip install 'huggingface_hub[hf_xet]>=0.32.0'
-	if ($LASTEXITCODE -ne 0) {
-		throw "pip install huggingface_hub failed with exit code $LASTEXITCODE."
-	}
+	Invoke-TlcNativeCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'install', 'huggingface_hub[hf_xet]>=0.32.0') `
+		-FailureMessage 'pip install huggingface_hub failed'
 
 	$oldHfHome = $env:HF_HOME
 	$oldHubCache = $env:HF_HUB_CACHE

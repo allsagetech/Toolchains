@@ -9,7 +9,7 @@ Run the complete local quality gate (Pester, static analysis, contract fixtures,
 pwsh -NoLogo -NoProfile -File ./scripts/test.ps1
 ```
 
-The gate measures the complete production helper set and enforces at least 80%
+The gate measures the complete production helper set and enforces at least 85%
 instruction coverage.
 
 Toolchain consumption is pinned coherently in `toolchain-consumer.json`. Every

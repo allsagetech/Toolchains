@@ -84,6 +84,81 @@ Describe 'Hugging Face layered image helpers' {
 		} finally { $env:HF_TOKEN = $oldToken }
 		{ Install-HfModelPackage -Model @{} } | Should -Throw '*Model.Repo*'
 	}
+
+	It 'installs and validates a layered model package through checked subprocesses' {
+		$environmentNames = @(
+			'HF_HOME', 'HF_HUB_CACHE', 'TRANSFORMERS_CACHE', 'HF_XET_CACHE',
+			'HF_XET_HIGH_PERFORMANCE', 'HF_HUB_DOWNLOAD_TIMEOUT', 'HF_HUB_ETAG_TIMEOUT'
+		)
+		$oldEnvironment = @{}
+		foreach ($name in $environmentNames) {
+			$oldEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+		}
+		try {
+			$env:HF_HOME = 'prior-home'
+			$env:HF_HUB_CACHE = 'prior-hub'
+			$env:TRANSFORMERS_CACHE = 'prior-transformers'
+			$env:HF_XET_CACHE = 'prior-xet'
+			$env:HF_XET_HIGH_PERFORMANCE = 'prior-performance'
+			$env:HF_HUB_DOWNLOAD_TIMEOUT = '321'
+			$env:HF_HUB_ETAG_TIMEOUT = '23'
+			$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('1.0.0')
+
+			Mock Test-TlcHostIsWindows { $false }
+			Mock Get-Command { [pscustomobject]@{ Source = 'python3' } } -ParameterFilter { $Name -eq 'python3' }
+			Mock Get-TlcHfHeaders { @{} }
+			Mock Get-TlcHfModelVersion { '2.3.4' }
+			Mock Invoke-TlcNativeCommand {
+				if (@($ArgumentList) -contains 'venv') {
+					$venvRoot = [string]$ArgumentList[-1]
+					New-Item -ItemType Directory -Path (Join-Path $venvRoot 'bin') -Force | Out-Null
+					[IO.File]::WriteAllText((Join-Path $venvRoot 'bin/python'), 'fixture')
+				}
+			}
+			Mock Invoke-TlcHfSnapshotDownload {
+				$modelRoot = Join-Path $CacheDir 'models--owner--model'
+				New-Item -ItemType Directory -Path (Join-Path $modelRoot 'blobs') -Force | Out-Null
+				New-Item -ItemType Directory -Path (Join-Path $modelRoot 'refs') -Force | Out-Null
+				New-Item -ItemType Directory -Path (Join-Path $modelRoot 'snapshots/main') -Force | Out-Null
+				[IO.File]::WriteAllText((Join-Path $modelRoot 'blobs/model'), 'model')
+			}
+
+			Install-HfModelPackage -Model @{
+				Repo = 'owner/model'
+				Alias = 'model-alias'
+				SourceModel = 'owner/source'
+				OfficialModel = 'owner/official'
+				CacheSlug = 'models--owner--model'
+				Revision = 'main'
+				AllowPatterns = @('*.json', '*.safetensors')
+			}
+
+			$global:TlcPackageConfig.Version | Should -BeExactly '2.3.4'
+			$global:TlcPackageConfig.UpToDate | Should -BeFalse
+			Test-Path -LiteralPath (Join-Path $script:TempRoot '.tlc') | Should -BeTrue
+			Test-Path -LiteralPath (Join-Path $script:TempRoot 'Dockerfile.hf-model-owner-model') | Should -BeTrue
+			Test-Path -LiteralPath (Join-Path $script:TempRoot '.hf-tools') | Should -BeFalse
+			$manifest = Get-Content -LiteralPath (Join-Path $script:TempRoot 'official-models.manifest.json') -Raw | ConvertFrom-Json
+			$manifest.models[0].alias | Should -BeExactly 'model-alias'
+			$manifest.models[0].source_model | Should -BeExactly 'owner/source'
+			Should -Invoke Invoke-TlcNativeCommand -Times 3 -Exactly
+			Should -Invoke Invoke-TlcHfSnapshotDownload -Times 1 -Exactly -ParameterFilter {
+				$Revision -eq 'main' -and @($AllowPatterns).Count -eq 2
+			}
+
+			Test-HfModelPackageInstall -Repo 'owner/model' -CacheSlug 'models--owner--model'
+			$env:HF_HOME | Should -BeExactly 'prior-home'
+			$env:HF_HUB_CACHE | Should -BeExactly 'prior-hub'
+		} finally {
+			foreach ($name in $environmentNames) {
+				if ($null -eq $oldEnvironment[$name]) {
+					Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+				} else {
+					Set-Item -LiteralPath "Env:$name" -Value $oldEnvironment[$name]
+				}
+			}
+		}
+	}
 }
 
 Describe 'Download integrity edge cases' {

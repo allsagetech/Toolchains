@@ -355,7 +355,13 @@ Describe 'Network and main policy branches' {
 	}
 
 	It 'validates descriptor schema branches before publication' {
-		$global:TlcPackageConfig = @{ Name = 'valid'; Platform = 'windows/amd64'; Tier = 'tooling' }
+		$global:TlcPackageConfig = @{
+			Name = 'valid'
+			CanonicalName = 'valid-family'
+			Platform = 'windows/amd64'
+			Tier = 'tooling'
+			Vex = '.github/vex/dependabot.openvex.json'
+		}
 		function global:Install-TlcPackage {}
 		function global:Test-TlcPackageInstall {}
 		{ Test-TlcPackageScript } | Should -Not -Throw
