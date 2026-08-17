@@ -652,6 +652,13 @@ function Test-ProductionReadinessPolicies {
 		$cosignText = Get-Content -LiteralPath $cosignScript -Raw
 		Assert-True ($cosignText -match 'Initialize-TlcCosignPackage') "$cosignScript bypasses the shared verified source build."
 	}
+	Assert-True ($familyText -match 'Initialize-TlcCranePackage[\s\S]+?BuildRevision = 1[\s\S]+?Invoke-TlcVerifiedGoCommandBuild') 'Shared Crane source build does not carry a republishable package revision.'
+	Assert-True ($familyText -match 'Initialize-TlcCranePackage[\s\S]+?GoToolchain = ''go1\.26\.6''') 'Shared Crane source build does not pin the fixed Go toolchain.'
+	Assert-True ($familyText -match 'cmd/crane/cmd\.Version=\$upstreamVersion[\s\S]+remote/transport\.Version=\$upstreamVersion') 'Shared Crane source build does not preserve its upstream version contracts.'
+	foreach ($craneScript in @('.\src\pkgs\crane.ps1', '.\src\pkgs\crane-linux.ps1')) {
+		$craneText = Get-Content -LiteralPath $craneScript -Raw
+		Assert-True ($craneText -match 'Initialize-TlcCranePackage') "$craneScript bypasses the shared verified source build."
+	}
 	$cueText = Get-Content -LiteralPath .\src\pkgs\cue.ps1 -Raw
 	Assert-True ($cueText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Cue still packages the vulnerable upstream binary.'
 	Assert-True ($cueText -match "PatchedTextVersion = 'v0\.39\.0'") 'Cue does not require the fixed golang.org/x/text version.'

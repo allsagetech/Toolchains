@@ -345,6 +345,57 @@ function Initialize-TlcCosignPackage {
 	}
 }
 
+function Initialize-TlcCranePackage {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[switch]$Linux
+	)
+
+	$global:TlcPackageConfig = @{
+		Name = $Name
+		CanonicalName = 'crane'
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
+		Upstream = 'https://github.com/google/go-containerregistry'
+		BuildRevision = 1
+		GoToolchain = 'go1.26.6'
+		IsLinux = [bool]$Linux
+	}
+	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
+
+	function global:Install-TlcPackage {
+		$latest = Get-GitHubTag -Owner 'google' -Repo 'go-containerregistry' -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+		$upstreamVersion = $latest.Version.ToString()
+		$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+		$TlcPackageConfig.Version = $packageVersion.ToString()
+		$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+		if ($TlcPackageConfig.UpToDate) { return }
+
+		$outputName = if ($TlcPackageConfig.IsLinux) { 'crane' } else { 'crane.exe' }
+		$executable = Get-TlcPkgPath $outputName
+		$ldflags = "-s -w -X github.com/google/go-containerregistry/cmd/crane/cmd.Version=$upstreamVersion -X github.com/google/go-containerregistry/pkg/v1/remote/transport.Version=$upstreamVersion"
+		Invoke-TlcVerifiedGoCommandBuild `
+			-Module 'github.com/google/go-containerregistry' `
+			-Version ([string]$latest.Name) `
+			-Command 'github.com/google/go-containerregistry/cmd/crane' `
+			-OutputPath $executable `
+			-GoToolchain $TlcPackageConfig.GoToolchain `
+			-LdFlags $ldflags
+
+		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "patched Crane source build did not produce $outputName" }
+		if ($TlcPackageConfig.IsLinux) {
+			& chmod '+x' $executable
+			if ($LASTEXITCODE -ne 0) { throw 'failed to mark crane executable' }
+		}
+		Write-TlcVars @{ env = @{ path = Get-TlcPkgRoot } }
+	}
+
+	function global:Test-TlcPackageInstall {
+		Toolchain exec (Get-TlcPkgUri) {
+			crane version
+		}
+	}
+}
+
 function Initialize-TlcKubectlPackage {
 	param(
 		[Parameter(Mandatory=$true)][string]$Name,
