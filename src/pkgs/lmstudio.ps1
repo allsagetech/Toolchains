@@ -98,10 +98,19 @@ function global:Test-TlcPackageInstall {
 			throw "LM Studio package manifest not found: $manifestPath"
 		}
 		$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-		if ($manifest.name -ne 'lmstudio' -or -not $manifest.bin.lmstudio) {
+		if ([string]$manifest.name -ne 'lmstudio') {
+			throw "Unexpected LM Studio package name in manifest: $($manifest.name)"
+		}
+		$binEntry = if ($manifest.bin -is [string]) {
+			[string]$manifest.bin
+		} else {
+			$lmstudioBinProperty = $manifest.bin.PSObject.Properties['lmstudio']
+			if ($lmstudioBinProperty) { [string]$lmstudioBinProperty.Value }
+		}
+		if ([string]::IsNullOrWhiteSpace($binEntry)) {
 			throw 'LM Studio package manifest does not expose the expected CLI shim.'
 		}
-		$entrypoint = Join-Path $lmstudioRoot ([string]$manifest.bin.lmstudio)
+		$entrypoint = Join-Path $lmstudioRoot $binEntry
 		if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) {
 			throw "LM Studio CLI entrypoint not found: $entrypoint"
 		}
