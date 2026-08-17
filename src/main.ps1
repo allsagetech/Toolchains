@@ -420,6 +420,86 @@ function Invoke-TlcScript($pkg) {
 	return (Invoke-TlcPackageLifecycle -Path $pkg)
 }
 
+function Resolve-TlcManualPackageSelection {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory=$true)][string]$Selector,
+		[string]$PackageRoot = (Join-Path (Get-Location).Path 'src\pkgs')
+	)
+
+	$rawSelector = $Selector.Trim() -replace '\\', '/'
+	if ([string]::IsNullOrWhiteSpace($rawSelector)) {
+		throw 'Manual package selector is empty.'
+	}
+	$explicitDescriptor = $rawSelector -match '/' -or $rawSelector.EndsWith('.ps1', [StringComparison]::OrdinalIgnoreCase)
+	$normalizedSelector = $rawSelector -replace '^(\./)+', '' -replace '^src/pkgs/', '' -replace '\.ps1$', ''
+	$resolvedPackageRoot = [IO.Path]::GetFullPath($PackageRoot).TrimEnd('\', '/')
+	if (-not (Test-Path -LiteralPath $resolvedPackageRoot -PathType Container)) {
+		throw "Package root does not exist: $resolvedPackageRoot"
+	}
+
+	$packageScripts = @(Get-ChildItem -LiteralPath $resolvedPackageRoot -Filter '*.ps1' -Recurse -File | Sort-Object FullName)
+	$descriptors = @(Read-TlcPackageDescriptors -Path @($packageScripts.FullName))
+	$records = @($descriptors | ForEach-Object {
+		$config = $_.Config
+		$relative = [IO.Path]::GetFullPath($_.Path).Substring($resolvedPackageRoot.Length).TrimStart([char[]]@('\', '/')) -replace '\\', '/'
+		[pscustomobject]@{
+			Path = [IO.Path]::GetFullPath($_.Path)
+			Relative = $relative -replace '\.ps1$', ''
+			BaseName = [IO.Path]::GetFileNameWithoutExtension($_.Path)
+			Name = [string]$config.Name
+			CanonicalName = if ($config.CanonicalName) { [string]$config.CanonicalName } else { [string]$config.Name }
+			Platform = [string]$config.Platform
+		}
+	})
+
+	if ($explicitDescriptor) {
+		$selectedRecords = @($records | Where-Object { $_.Relative -ieq $normalizedSelector })
+		if ($selectedRecords.Count -ne 1) {
+			throw "Manual descriptor selector '$Selector' matched $($selectedRecords.Count) package scripts."
+		}
+		return [pscustomobject]@{
+			Selector = $Selector
+			CanonicalName = $selectedRecords[0].CanonicalName
+			IsFamily = $false
+			Paths = @($selectedRecords[0].Path)
+		}
+	}
+
+	$family = @($records | Where-Object { $_.CanonicalName -ieq $normalizedSelector })
+	if ($family.Count -gt 1) {
+		$missingPlatform = @($family | Where-Object { [string]::IsNullOrWhiteSpace($_.Platform) })
+		if ($missingPlatform.Count -gt 0) {
+			throw "Atomic family '$normalizedSelector' contains package descriptors without platform metadata."
+		}
+		$duplicatePlatforms = @($family | Group-Object Platform | Where-Object Count -ne 1)
+		if ($duplicatePlatforms.Count -gt 0) {
+			throw "Atomic family '$normalizedSelector' contains duplicate platform descriptors: $($duplicatePlatforms.Name -join ', ')."
+		}
+		$orderedFamily = @($family | Sort-Object Platform,Name)
+		return [pscustomobject]@{
+			Selector = $Selector
+			CanonicalName = $orderedFamily[0].CanonicalName
+			IsFamily = $true
+			Paths = @($orderedFamily.Path)
+		}
+	}
+
+	$selectedRecords = @($records | Where-Object {
+		$_.Name -ieq $normalizedSelector -or $_.Relative -ieq $normalizedSelector -or $_.BaseName -ieq $normalizedSelector
+	})
+	if ($selectedRecords.Count -eq 0 -and $family.Count -eq 1) { $selectedRecords = @($family) }
+	if ($selectedRecords.Count -ne 1) {
+		throw "Manual package selector '$Selector' matched $($selectedRecords.Count) package scripts."
+	}
+	return [pscustomobject]@{
+		Selector = $Selector
+		CanonicalName = $selectedRecords[0].CanonicalName
+		IsFamily = $false
+		Paths = @($selectedRecords[0].Path)
+	}
+}
+
 function Get-TlcPushPackagePaths {
 	[CmdletBinding()]
 	param(

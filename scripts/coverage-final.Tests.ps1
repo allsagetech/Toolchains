@@ -176,6 +176,38 @@ Describe 'Workflow matrix and signing behavior' {
 		@((Get-Content -LiteralPath '.matrix' -Raw | ConvertFrom-Json).include).Count | Should -Be 1
 	}
 
+	It 'resolves canonical families atomically while preserving exact descriptor selection' {
+		$packageRoot = Join-Path $script:TempRoot 'pkgs'
+		[IO.File]::WriteAllText((Join-Path $packageRoot 'crane.ps1'), @'
+$global:TlcPackageConfig = @{ Name = 'crane'; CanonicalName = 'crane'; Platform = 'windows/amd64' }
+function global:Install-TlcPackage {}
+function global:Test-TlcPackageInstall {}
+'@)
+		[IO.File]::WriteAllText((Join-Path $packageRoot 'crane-linux.ps1'), @'
+$global:TlcPackageConfig = @{ Name = 'crane-linux'; CanonicalName = 'crane'; Platform = 'linux/amd64' }
+function global:Install-TlcPackage {}
+function global:Test-TlcPackageInstall {}
+'@)
+		[IO.File]::WriteAllText((Join-Path $packageRoot 'fixture.ps1'), @'
+$global:TlcPackageConfig = @{ Name = 'solo' }
+function global:Install-TlcPackage {}
+function global:Test-TlcPackageInstall {}
+'@)
+
+		$family = Resolve-TlcManualPackageSelection -Selector crane -PackageRoot $packageRoot
+		$family.IsFamily | Should -BeTrue
+		$family.CanonicalName | Should -BeExactly 'crane'
+		@($family.Paths).Count | Should -Be 2
+		@($family.Paths | ForEach-Object { [IO.Path]::GetFileName($_) }) | Should -Be @('crane-linux.ps1', 'crane.ps1')
+
+		$exact = Resolve-TlcManualPackageSelection -Selector 'src/pkgs/crane.ps1' -PackageRoot $packageRoot
+		$exact.IsFamily | Should -BeFalse
+		[IO.Path]::GetFileName($exact.Paths[0]) | Should -BeExactly 'crane.ps1'
+		(Resolve-TlcManualPackageSelection -Selector crane-linux -PackageRoot $packageRoot).IsFamily | Should -BeFalse
+		(Resolve-TlcManualPackageSelection -Selector solo -PackageRoot $packageRoot).CanonicalName | Should -BeExactly 'solo'
+		{ Resolve-TlcManualPackageSelection -Selector missing -PackageRoot $packageRoot } | Should -Throw '*matched 0 package scripts*'
+	}
+
 	It 'signs immutable Docker digests using the configured key' {
 		$cosignPath = Join-Path $script:TempRoot 'cosign.ps1'
 		[IO.File]::WriteAllText($cosignPath, '$global:LASTEXITCODE = 0')
