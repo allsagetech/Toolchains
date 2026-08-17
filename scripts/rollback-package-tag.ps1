@@ -49,7 +49,12 @@ Invoke-RollbackCosignVerification -Arguments (@('verify-attestation','--type','s
 Invoke-RollbackCosignVerification -Arguments (@('verify-attestation','--type','slsaprovenance') + $identityArguments + $digestRef)
 
 $previousDigest = $null
-try { $previousDigest = Get-RegistryTagDigest -Reference $alias } catch { Write-Verbose "Alias does not currently exist: $alias" }
+try { $previousDigest = Get-RegistryTagDigest -Reference $alias } catch {
+	Write-Verbose "Alias does not currently exist: $alias"
+	# A missing optional alias is valid during rehearsal and first promotion. Do
+	# not let the caught native inspect failure leak a nonzero process exit.
+	$global:LASTEXITCODE = 0
+}
 $changed = $previousDigest -cne $targetDigest
 $applied = $false
 if ($changed -and $PSCmdlet.ShouldProcess($alias, "move mutable alias to verified $digestRef")) {

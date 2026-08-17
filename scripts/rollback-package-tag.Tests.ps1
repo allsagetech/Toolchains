@@ -5,11 +5,16 @@ Describe 'Signed package alias rollback' {
 		$global:RollbackTarget = 'sha256:' + ('a' * 64)
 		$global:RollbackPrevious = 'sha256:' + ('b' * 64)
 		$global:RollbackAliasDigest = $global:RollbackPrevious
+		$global:RollbackAliasExists = $true
 		$global:RollbackCosignCalls = 0
 		$global:RollbackCreateCalls = 0
 		function global:docker {
 			if ($args[1] -eq 'imagetools' -and $args[2] -eq 'inspect') {
 				$reference = [string]$args[3]
+				if ($reference -notlike '*:demo-1.2.3' -and -not $global:RollbackAliasExists) {
+					$global:LASTEXITCODE = 1
+					return
+				}
 				$digest = if ($reference -like '*:demo-1.2.3') { $global:RollbackTarget } else { $global:RollbackAliasDigest }
 				$global:LASTEXITCODE = 0
 				return (@{ digest=$digest } | ConvertTo-Json -Compress)
@@ -29,7 +34,7 @@ Describe 'Signed package alias rollback' {
 	AfterEach {
 		Remove-Item Function:\global:docker -Force -ErrorAction SilentlyContinue
 		Remove-Item Function:\global:cosign -Force -ErrorAction SilentlyContinue
-		Remove-Variable RollbackTarget,RollbackPrevious,RollbackAliasDigest,RollbackCosignCalls,RollbackCreateCalls -Scope Global -Force -ErrorAction SilentlyContinue
+		Remove-Variable RollbackTarget,RollbackPrevious,RollbackAliasDigest,RollbackAliasExists,RollbackCosignCalls,RollbackCreateCalls -Scope Global -Force -ErrorAction SilentlyContinue
 	}
 
 	It 'verifies signature and attestations before moving only the mutable alias' {
@@ -48,6 +53,16 @@ Describe 'Signed package alias rollback' {
 		$global:RollbackCreateCalls | Should -Be 0
 		{ & $script:rollback -Repository owner/repo -Package demo -Version 1.2.3 -AliasTag demo-1.2.2 -ExpectedDigest $global:RollbackTarget -Confirm:$false } | Should -Throw '*AliasTag must*'
 		{ & $script:rollback -Repository owner/repo -Package demo -Version 1.2.3 -AliasTag demo-stable -ExpectedDigest ('sha256:' + ('c' * 64)) -Confirm:$false } | Should -Throw '*digest mismatch*'
+		$global:RollbackCreateCalls | Should -Be 0
+	}
+
+	It 'treats a missing optional alias as a clean WhatIf result' {
+		$global:RollbackAliasExists = $false
+		$result = & $script:rollback -Repository owner/repo -Package demo -Version 1.2.3 -AliasTag demo-stable -ExpectedDigest $global:RollbackTarget -WhatIf
+		$result.PreviousDigest | Should -BeNullOrEmpty
+		$result.Changed | Should -BeTrue
+		$result.Applied | Should -BeFalse
+		$global:LASTEXITCODE | Should -Be 0
 		$global:RollbackCreateCalls | Should -Be 0
 	}
 
