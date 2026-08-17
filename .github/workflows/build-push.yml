@@ -930,8 +930,11 @@ jobs:
 
           Invoke-CosignPublication -Description 'cosign sign' `
             -ArgumentList @('sign', '--yes', $env:DIGEST_REF)
+          # Rekor v1 rejects attestations over 100 KB. Cosign's standardized
+          # bundle path uses the TUF signing configuration and Rekor v2's
+          # hash-based log entry, preserving the complete SPDX document.
           Invoke-CosignPublication -Description 'cosign SBOM attestation' `
-            -ArgumentList @('attest', '--yes', '--type', 'spdxjson', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.spdx.json', $env:DIGEST_REF)
+            -ArgumentList @('attest', '--yes', '--new-bundle-format=true', '--use-signing-config=true', '--type', 'spdxjson', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.spdx.json', $env:DIGEST_REF)
           Invoke-CosignPublication -Description 'cosign provenance attestation' `
             -ArgumentList @('attest', '--yes', '--type', 'slsaprovenance', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json', $env:DIGEST_REF)
 

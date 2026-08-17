@@ -572,6 +572,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($cosignEvidenceText -match "'--offline', '--timeout', '30s'") 'Cosign verification does not use the signed transparency bundle with a bounded internal timeout.'
 	Assert-True ($workflowText -match 'Verify signature and attestations fail closed[\s\S]+timeout-minutes:\s+6') 'Cosign verification step has no GitHub-enforced deadline.'
 	Assert-True ($workflowText -match 'function Invoke-CosignPublication[\s\S]+\$maxAttempts = 3[\s\S]+Start-Sleep -Seconds \$delaySeconds') 'Cosign publication does not retry transient signature or attestation infrastructure failures.'
+	Assert-True ($workflowText -match "cosign SBOM attestation[\s\S]+'--new-bundle-format=true'[\s\S]+'--use-signing-config=true'[\s\S]+'--type', 'spdxjson'") 'Large SPDX attestations are not routed through the standardized bundle and Rekor v2 signing path.'
+	Assert-True ($cosignEvidenceText -match "'verify-attestation', '--new-bundle-format=true', '--type', 'spdxjson'") 'Published standardized SPDX bundles are not verified explicitly.'
 	Assert-True ($cosignEvidenceText -match 'diagnostic handles inherited[\s\S]+runner-log backpressure') 'Cosign verification does not document why diagnostic handles remain inherited while verified payloads are written to disk.'
 	Assert-True ($cosignEvidenceText -notmatch 'RedirectStandardOutput|RedirectStandardError|-RedirectStandardOutput|-RedirectStandardError') 'Cosign verification still redirects child-process output and can deadlock the Windows runner.'
 	Assert-True ($cosignEvidenceText -notmatch 'ReadToEndAsync|GetAwaiter\(\)\.GetResult\(\)') 'Cosign verification can still hang while draining a terminated child process.'

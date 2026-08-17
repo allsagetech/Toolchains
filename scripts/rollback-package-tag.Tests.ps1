@@ -56,6 +56,18 @@ Describe 'Signed package alias rollback' {
 		$global:RollbackCreateCalls | Should -Be 0
 	}
 
+	It 'accepts an SPDX attestation stored in the standardized bundle format' {
+		function global:cosign {
+			$global:RollbackCosignCalls++
+			$isLegacySbomAttempt = $args -contains 'spdxjson' -and $args -notcontains '--new-bundle-format=true'
+			$global:LASTEXITCODE = if ($isLegacySbomAttempt) { 1 } else { 0 }
+		}
+		$result = & $script:rollback -Repository owner/repo -Package demo -Version 1.2.3 -AliasTag demo-stable -ExpectedDigest $global:RollbackTarget -Confirm:$false
+		$result.Applied | Should -BeTrue
+		$global:RollbackCosignCalls | Should -Be 4
+		$global:RollbackCreateCalls | Should -Be 1
+	}
+
 	It 'treats a missing optional alias as a clean WhatIf result' {
 		$global:RollbackAliasExists = $false
 		$result = & $script:rollback -Repository owner/repo -Package demo -Version 1.2.3 -AliasTag demo-stable -ExpectedDigest $global:RollbackTarget -WhatIf

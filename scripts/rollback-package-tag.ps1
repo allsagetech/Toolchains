@@ -40,12 +40,23 @@ if ($targetDigest -cne $normalizedExpectedDigest) {
 $digestRef = "$Repository@$targetDigest"
 $identityArguments = @('--offline','--certificate-identity-regexp',$CertificateIdentityRegexp,'--certificate-oidc-issuer',$CertificateOidcIssuer)
 function Invoke-RollbackCosignVerification {
-	param([Parameter(Mandatory=$true)][string[]]$Arguments)
+	param(
+		[Parameter(Mandatory=$true)][string[]]$Arguments,
+		[string[]]$FallbackArguments
+	)
 	& cosign @Arguments | Out-Null
-	if ($LASTEXITCODE -ne 0) { throw "Cosign verification failed for $digestRef ($($Arguments[0]))." }
+	if ($LASTEXITCODE -eq 0) { return }
+	if ($FallbackArguments) {
+		Write-Verbose "Retrying Cosign verification with the standardized bundle format."
+		& cosign @FallbackArguments | Out-Null
+		if ($LASTEXITCODE -eq 0) { return }
+	}
+	throw "Cosign verification failed for $digestRef ($($Arguments[0]))."
 }
 Invoke-RollbackCosignVerification -Arguments (@('verify') + $identityArguments + $digestRef)
-Invoke-RollbackCosignVerification -Arguments (@('verify-attestation','--type','spdxjson') + $identityArguments + $digestRef)
+Invoke-RollbackCosignVerification `
+	-Arguments (@('verify-attestation','--type','spdxjson') + $identityArguments + $digestRef) `
+	-FallbackArguments (@('verify-attestation','--new-bundle-format=true','--type','spdxjson') + $identityArguments + $digestRef)
 Invoke-RollbackCosignVerification -Arguments (@('verify-attestation','--type','slsaprovenance') + $identityArguments + $digestRef)
 
 $previousDigest = $null

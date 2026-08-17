@@ -87,5 +87,5 @@ $identityArguments = @(
 	'--certificate-oidc-issuer', $CertificateOidcIssuer
 )
 Invoke-CosignVerification -Description 'Published signature verification' -Arguments (@('verify') + $identityArguments + $DigestRef)
-Invoke-CosignVerification -Description 'Published SBOM attestation verification' -Arguments (@('verify-attestation', '--type', 'spdxjson') + $identityArguments + $DigestRef)
+Invoke-CosignVerification -Description 'Published SBOM attestation verification' -Arguments (@('verify-attestation', '--new-bundle-format=true', '--type', 'spdxjson') + $identityArguments + $DigestRef)
 Invoke-CosignVerification -Description 'Published provenance attestation verification' -Arguments (@('verify-attestation', '--type', 'slsaprovenance') + $identityArguments + $DigestRef)
