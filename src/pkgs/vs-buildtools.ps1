@@ -178,7 +178,9 @@ function global:Test-TlcPackageInstall {
     Toolchain exec (Get-TlcPkgUri) {
         $testC = Join-Path $env:TEMP 'tlc_msvc_smoketest.c'
         Set-Content -Path $testC -Value 'int main(void){return 0;}' -Encoding ascii
-        & cl.exe /nologo /Bv /c $testC | Out-Host
+		$compiler = Get-TlcApplicationPath -Name 'cl.exe'
+		Invoke-TlcNativeCommand -FilePath $compiler -ArgumentList @('/nologo', '/Bv', '/c', $testC) `
+			-FailureMessage 'Default MSVC compiler smoke test failed'
     }
 
     foreach ($msvc in $MSVCVersions) {
@@ -187,7 +189,9 @@ function global:Test-TlcPackageInstall {
             Toolchain exec "$(Get-TlcPkgUri)<$($msvc.name)-$arch" {
                 $testC = Join-Path $env:TEMP "tlc_msvc_smoketest_$($env:VSCMD_ARG_VCVARS_VER)_$($env:VSCMD_ARG_TGT_ARCH).c"
                 Set-Content -Path $testC -Value 'int main(void){return 0;}' -Encoding ascii
-                & cl.exe /nologo /Bv /c $testC | Out-Host
+				$compiler = Get-TlcApplicationPath -Name 'cl.exe'
+				Invoke-TlcNativeCommand -FilePath $compiler -ArgumentList @('/nologo', '/Bv', '/c', $testC) `
+					-FailureMessage "MSVC compiler smoke test failed for $($msvc.name)-$arch"
             }
         }
     }
@@ -201,6 +205,7 @@ function global:Invoke-CustomDockerBuild($tag, [string[]]$labels) {
 	$dockerArguments = @('build', '-f', $dockerfile, '-t', $tag)
 	foreach ($label in $labels) { $dockerArguments += @('--label', $label) }
 	$dockerArguments += $pkgRoot
-	& docker @dockerArguments
-	if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE for $tag" }
+	$docker = Get-TlcApplicationPath -Name 'docker'
+	Invoke-TlcNativeCommand -FilePath $docker -ArgumentList $dockerArguments `
+		-FailureMessage "docker build failed for $tag"
 }

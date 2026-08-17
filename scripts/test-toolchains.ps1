@@ -514,6 +514,7 @@ function Test-ProductionReadinessPolicies {
 	foreach ($removedPath in @('Identity\\ServiceHub\\IdentityService', 'Microsoft\\TestWindow', 'LanguageServices\\InteractiveHost')) {
 		Assert-True ($vsBuildToolsText -match $removedPath) "Visual Studio Build Tools does not remove vulnerable ancillary path $removedPath."
 	}
+	Assert-True (($vsBuildToolsText | Select-String -Pattern 'Invoke-TlcNativeCommand' -AllMatches).Matches.Count -ge 3 -and $vsBuildToolsText -notmatch '& cl\.exe') 'Visual Studio Build Tools exposes successful compiler or Docker diagnostics as package errors.'
 	if (Test-TlcHostIsWindows) {
 		$canonicalPathList = ConvertTo-TlcCanonicalPathList -Value 'D:\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\..\..\..\..\..\..\..\Windows Kits\10\bin\10.0.26100.0\\x64;C:\Windows\System32' -ContainedRoot 'D:\pkg'
 		Assert-True ($canonicalPathList -eq 'D:\pkg\Windows Kits\10\bin\10.0.26100.0\x64;C:\Windows\System32') 'Path-list canonicalization did not normalize the Visual Studio SDK path emitted by VsDevCmd.'
