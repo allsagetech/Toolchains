@@ -1,0 +1,78 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/allsagetech/Toolchains/security/vex/vscode-2026-08-17",
+  "author": "AllSageTech",
+  "timestamp": "2026-08-17T12:00:00-05:00",
+  "version": 1,
+  "tooling": "https://github.com/allsagetech/Toolchains",
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://nvd.nist.gov/vuln/detail/CVE-2018-7408",
+        "name": "CVE-2018-7408"
+      },
+      "products": [
+        {
+          "@id": "pkg:npm/npm@1.0.1",
+          "identifiers": {
+            "purl": "pkg:npm/npm@1.0.1"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "The matched resources/app/extensions/npm/package.json describes VS Code's built-in npm language-support extension, not the npm CLI package affected by this advisory. The extension contains no npm CLI implementation."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://nvd.nist.gov/vuln/detail/CVE-2019-16775",
+        "name": "CVE-2019-16775"
+      },
+      "products": [
+        {
+          "@id": "pkg:npm/npm@1.0.1",
+          "identifiers": {
+            "purl": "pkg:npm/npm@1.0.1"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "The matched resources/app/extensions/npm/package.json describes VS Code's built-in npm language-support extension, not the npm CLI package affected by this advisory. The extension contains no npm CLI implementation."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://nvd.nist.gov/vuln/detail/CVE-2019-16776",
+        "name": "CVE-2019-16776"
+      },
+      "products": [
+        {
+          "@id": "pkg:npm/npm@1.0.1",
+          "identifiers": {
+            "purl": "pkg:npm/npm@1.0.1"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "The matched resources/app/extensions/npm/package.json describes VS Code's built-in npm language-support extension, not the npm CLI package affected by this advisory. The extension contains no npm CLI implementation."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://nvd.nist.gov/vuln/detail/CVE-2019-16777",
+        "name": "CVE-2019-16777"
+      },
+      "products": [
+        {
+          "@id": "pkg:npm/npm@1.0.1",
+          "identifiers": {
+            "purl": "pkg:npm/npm@1.0.1"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "component_not_present",
+      "impact_statement": "The matched resources/app/extensions/npm/package.json describes VS Code's built-in npm language-support extension, not the npm CLI package affected by this advisory. The extension contains no npm CLI implementation."
+    }
+  ]
+}

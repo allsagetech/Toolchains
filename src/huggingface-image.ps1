@@ -43,6 +43,17 @@ function Add-TlcDockerCopyLine {
 	$Lines.Add("COPY `"$src`" `"$dst`"") | Out-Null
 }
 
+function Add-TlcPackagingRevision {
+	param(
+		[Parameter(Mandatory=$true)][string]$Version,
+		[Parameter(Mandatory=$true)][ValidateRange(1, 99)][int]$Revision
+	)
+
+	$semanticVersion = [TlcSemanticVersion]::new($Version)
+	$revisedBuild = ([int]$semanticVersion.Build * 100) + $Revision
+	return '{0}.{1}.{2}+{3}' -f $semanticVersion.Major, $semanticVersion.Minor, $semanticVersion.Patch, $revisedBuild
+}
+
 function Write-HfModelDockerIgnore {
 	param(
 		[Parameter(Mandatory=$true)][string]$PkgRoot
@@ -192,6 +203,9 @@ function Install-HfModelPackage {
 
 	$hfHeaders = Get-TlcHfHeaders
 	$version = Get-TlcHfModelVersion -Repo $repo -Headers $hfHeaders
+	if ([int]$TlcPackageConfig.BuildRevision -gt 0) {
+		$version = Add-TlcPackagingRevision -Version $version -Revision ([int]$TlcPackageConfig.BuildRevision)
+	}
 
 	$TlcPackageConfig.Version = $version
 	$TlcPackageConfig.UpToDate = -not ([TlcSemanticVersion]::new($version).LaterThan($TlcPackageConfig.Latest))

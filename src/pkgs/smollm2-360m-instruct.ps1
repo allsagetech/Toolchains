@@ -8,6 +8,7 @@ $global:TlcPackageConfig = @{
 	Name = 'smollm2-360m-instruct'
 	RunsOn = 'ubuntu-latest'
 	Tier = 'model-small'
+	BuildRevision = 1
 }
 
 function global:Install-TlcPackage {

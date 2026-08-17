@@ -443,6 +443,7 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($nodeFamilyText -match "'-tzf'[\s\S]+contains an unsafe path") 'Pinned npm archives are not checked for path traversal before extraction.'
 	Assert-True ($nodeFamilyText -match "'-tvzf'[\s\S]+contains links") 'Pinned npm archives do not reject links before extraction.'
 	Assert-True ($nodeFamilyText -match 'npm archive identity mismatch') 'Pinned npm archive name and version are not verified after extraction.'
+	Assert-True ($nodeFamilyText.Contains("ValidatePattern('^(@[a-z0-9]") -and $nodeFamilyText -match 'archivePackageName') 'Pinned npm archive installation does not support verified scoped packages.'
 	foreach ($nodeMajor in @(22, 24)) {
 		$config = (Read-TlcPackageDescriptor -Path ".\src\pkgs\node\node$nodeMajor.ps1").Config
 		$nodePublication = Get-TlcPackagePublicationState -Config $config
@@ -457,6 +458,48 @@ function Test-ProductionReadinessPolicies {
 			Assert-True ($config.NpmDependencyOverlays[$overlayName].ExpectedSha512 -match '^[0-9a-f]{128}$') "Node $nodeMajor $overlayName overlay does not pin registry SHA-512 integrity."
 		}
 	}
+	foreach ($nodeMajor in @(18, 20, 25)) {
+		$config = (Read-TlcPackageDescriptor -Path ".\src\pkgs\node\node$nodeMajor.ps1").Config
+		$nodePublication = Get-TlcPackagePublicationState -Config $config
+		Assert-True (-not $nodePublication.PublishEligible) "End-of-life Node $nodeMajor remains eligible for publication."
+		Assert-True ($nodePublication.QuarantineReason -match 'end-of-life') "End-of-life Node $nodeMajor has no actionable quarantine reason."
+		Assert-True ($config.Matcher -eq "^node-$nodeMajor\.") "End-of-life Node $nodeMajor quarantine matcher is not anchored to its release line."
+	}
+	Assert-True ((Add-TlcPackagingRevision -Version '2026.8.17+1232' -Revision 1) -eq '2026.8.17+123201') 'Packaging revisions do not preserve and extend model timestamp ordering.'
+	foreach ($modelPath in @(
+		'.\src\pkgs\qwen2.5-0.5b-instruct.ps1'
+		'.\src\pkgs\qwen3-0.6b.ps1'
+		'.\src\pkgs\smollm2-135m-instruct.ps1'
+		'.\src\pkgs\smollm2-360m-instruct.ps1'
+	)) {
+		$modelConfig = (Read-TlcPackageDescriptor -Path $modelPath).Config
+		Assert-True ($modelConfig.BuildRevision -eq 1) "$modelPath does not force a republishable scratch-image rebuild."
+	}
+	foreach ($deferredModelPath in @('.\src\pkgs\openai-gpt-oss-20b.ps1', '.\src\pkgs\qwen2.5-coder-7b-instruct.ps1')) {
+		$deferredConfig = (Read-TlcPackageDescriptor -Path $deferredModelPath).Config
+		Assert-True (-not $deferredConfig.Contains('BuildRevision')) "$deferredModelPath was changed despite being outside the approved remediation scope."
+	}
+	$gitConfig = (Read-TlcPackageDescriptor -Path .\src\pkgs\git.ps1).Config
+	$gitText = Get-Content -LiteralPath .\src\pkgs\git.ps1 -Raw
+	Assert-True ($gitConfig.BuildRevision -eq 1 -and $gitText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Git does not replace its vulnerable bundled Git LFS binary with a republishable verified source build.'
+	Assert-True ($gitText -match "GoToolchain = 'go1\.26\.6'" -and $gitText -match "PatchedNetVersion = 'v0\.56\.0'" -and $gitText -match "PatchedTextVersion = 'v0\.39\.0'") 'Git LFS source build does not enforce the fixed Go dependency floors.'
+	Assert-True ($gitText -match 'git lfs version') 'Git package testing does not exercise the rebuilt Git LFS binary.'
+	$lmStudioConfig = (Read-TlcPackageDescriptor -Path .\src\pkgs\lmstudio.ps1).Config
+	$lmStudioText = Get-Content -LiteralPath .\src\pkgs\lmstudio.ps1 -Raw
+	Assert-True ($lmStudioConfig.BuildRevision -eq 1 -and $lmStudioConfig.NpmVersion -eq '12.0.2') 'LM Studio does not carry a republishable hardened npm bundle.'
+	Assert-True ($lmStudioText -match 'Install-TlcPinnedNpmArchive' -and $lmStudioText -match 'npm --version') 'LM Studio does not install and exercise the verified npm replacement.'
+	$vscodeConfig = (Read-TlcPackageDescriptor -Path .\src\pkgs\vscode.ps1).Config
+	$vscodeText = Get-Content -LiteralPath .\src\pkgs\vscode.ps1 -Raw
+	Assert-True ($vscodeConfig.BuildRevision -eq 1 -and $vscodeConfig.Vex -eq '.github/vex/vscode.openvex.json') 'VS Code does not carry the remediated dependency revision and scoped VEX evidence.'
+	Assert-True ($vscodeText -match 'minimumVersion\.LaterThan\(\$installedVersion\)' -and $vscodeText -match 'Skipping removed VS Code dependency path') 'VS Code security overlays can downgrade or reintroduce dependencies in newer upstream releases.'
+	$vscodeOverlays = @($vscodeConfig.SecurityOverlays)
+	Assert-True ($vscodeOverlays.Count -eq 9) 'VS Code security overlay set is incomplete.'
+	foreach ($overlay in $vscodeOverlays) {
+		Assert-True ($overlay.ExpectedSha512 -match '^[0-9a-f]{128}$') "VS Code $($overlay.Name)@$($overlay.Version) overlay does not pin registry SHA-512 integrity."
+	}
+	$vscodeVex = Get-Content -LiteralPath .\.github\vex\vscode.openvex.json -Raw | ConvertFrom-Json
+	Assert-True (@($vscodeVex.statements).Count -eq 4) 'VS Code VEX does not cover exactly the four npm-extension false positives.'
+	Assert-True (@($vscodeVex.statements | Where-Object { $_.status -ne 'not_affected' -or $_.justification -ne 'component_not_present' }).Count -eq 0) 'VS Code VEX contains an unsupported or overly broad status.'
 	$sevenZipPackageText = Get-Content -LiteralPath .\src\pkgs\7-zip.ps1 -Raw
 	Assert-True ($sevenZipPackageText -match 'github\.com/ip7z/7zip/releases/download/25\.01/7z2501-x64\.exe') '7-Zip does not use the official GitHub release asset with published SHA-256 metadata.'
 	$doxygenPackageText = Get-Content -LiteralPath .\src\pkgs\doxygen.ps1 -Raw
@@ -464,6 +507,10 @@ function Test-ProductionReadinessPolicies {
 	$vsBuildToolsText = Get-Content -LiteralPath .\src\pkgs\vs-buildtools.ps1 -Raw
 	Assert-True ($vsBuildToolsText.Contains('${env:ProgramFiles(x86)}\Microsoft SDKs')) 'Visual Studio Build Tools omits an SDK directory referenced by its generated PATH contract.'
 	Assert-True ($vsBuildToolsText -match 'ConvertTo-TlcCanonicalPathList\s+-Value\s+\$value\s+-ContainedRoot') 'Visual Studio Build Tools does not canonicalize generated path-list variables before writing its package contract.'
+	Assert-True ($vsBuildToolsText -match 'BuildRevision = 1' -and $vsBuildToolsText -match 'unusedAncillaryPaths') 'Visual Studio Build Tools does not remove unused vulnerable IDE components in a republishable revision.'
+	foreach ($removedPath in @('Identity\\ServiceHub\\IdentityService', 'Microsoft\\TestWindow', 'LanguageServices\\InteractiveHost')) {
+		Assert-True ($vsBuildToolsText -match $removedPath) "Visual Studio Build Tools does not remove vulnerable ancillary path $removedPath."
+	}
 	if (Test-TlcHostIsWindows) {
 		$canonicalPathList = ConvertTo-TlcCanonicalPathList -Value 'D:\pkg\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\core\..\..\..\..\..\..\..\Windows Kits\10\bin\10.0.26100.0\\x64;C:\Windows\System32' -ContainedRoot 'D:\pkg'
 		Assert-True ($canonicalPathList -eq 'D:\pkg\Windows Kits\10\bin\10.0.26100.0\x64;C:\Windows\System32') 'Path-list canonicalization did not normalize the Visual Studio SDK path emitted by VsDevCmd.'

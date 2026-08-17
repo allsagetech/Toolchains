@@ -8,6 +8,7 @@ $global:TlcPackageConfig = @{
 	Name = 'qwen2.5-0.5b-instruct'
 	RunsOn = 'ubuntu-latest'
 	Tier = 'model-small'
+	BuildRevision = 1
 }
 
 function global:Install-TlcPackage {

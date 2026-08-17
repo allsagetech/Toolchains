@@ -35,15 +35,16 @@ function Expand-TlcVerifiedTarGzArchive {
 
 function Install-TlcPinnedNpmArchive {
 	param(
-		[Parameter(Mandatory=$true)][ValidatePattern('^[a-z0-9][a-z0-9._-]*$')][string]$Name,
+		[Parameter(Mandatory=$true)][ValidatePattern('^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$')][string]$Name,
 		[Parameter(Mandatory=$true)][ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')][string]$Version,
 		[Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-fA-F]{128}$')][string]$ExpectedSha512,
 		[Parameter(Mandatory=$true)][string]$Destination
 	)
 
 	$encodedName = [uri]::EscapeDataString($Name)
-	$archiveBaseName = "$($Name.Replace('/', '-'))-$Version"
-	$archiveName = "$archiveBaseName.tgz"
+	$archivePackageName = @($Name -split '/')[-1]
+	$archiveBaseName = "$($Name.Replace('@', '').Replace('/', '-'))-$Version"
+	$archiveName = "$archivePackageName-$Version.tgz"
 	$archiveUri = "https://registry.npmjs.org/$encodedName/-/$archiveName"
 	$archivePath = Get-TlcStagingPath $archiveName
 	$extractRoot = Get-TlcStagingPath "$archiveBaseName-extract"

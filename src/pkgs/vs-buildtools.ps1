@@ -7,6 +7,7 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
     Name = 'vs-buildtools'
+	BuildRevision = 1
 }
 
 $global:MSVCVersions = @(
@@ -40,15 +41,16 @@ function global:Install-TlcPackage {
     }
 
     $TargetVersion = $VSInfo.Version
+	$PackageVersion = [TlcSemanticVersion]::new((Add-TlcPackagingRevision -Version $TargetVersion.ToString() -Revision ([int]$TlcPackageConfig.BuildRevision)))
 
     if ($TlcPackageConfig.Latest) {
-        $TlcPackageConfig.UpToDate = -not $TargetVersion.LaterThan($TlcPackageConfig.Latest)
+		$TlcPackageConfig.UpToDate = -not $PackageVersion.LaterThan($TlcPackageConfig.Latest)
     }
     else {
         $TlcPackageConfig.UpToDate = $false
     }
 
-    $TlcPackageConfig.Version = $TargetVersion.ToString()
+    $TlcPackageConfig.Version = $PackageVersion.ToString()
 
     if ($TlcPackageConfig.UpToDate) {
         return
@@ -91,6 +93,16 @@ function global:Install-TlcPackage {
     [System.IO.File]::WriteAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\ext\vcvars\vcvars140.bat'),
         [System.IO.File]::ReadAllText((Get-TlcPkgPath 'Microsoft Visual Studio\2022\BuildTools\Common7\Tools\vsdevcmd\ext\vcvars\vcvars140.bat')).
         Replace('reg query "%1\Microsoft\VisualStudio\SxS\VC7" /v "14.0"', 'echo 14.0 X %~dp0..\..\..\..\..\..\..\..\Microsoft Visual Studio 14.0\VC\'))
+
+	$unusedAncillaryPaths = @(
+		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\Identity\ServiceHub\IdentityService'
+		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow'
+		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\VBCSharp\LanguageServices\InteractiveHost'
+	)
+	foreach ($relativePath in $unusedAncillaryPaths) {
+		$fullPath = Get-TlcPkgPath $relativePath
+		if (Test-Path -LiteralPath $fullPath) { Remove-Item -LiteralPath $fullPath -Recurse -Force }
+	}
 
     Write-Output 'Done Hacking'
 
@@ -154,6 +166,14 @@ function global:Install-TlcPackage {
 }
 
 function global:Test-TlcPackageInstall {
+	foreach ($relativePath in @(
+		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\Identity\ServiceHub\IdentityService'
+		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow'
+		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\VBCSharp\LanguageServices\InteractiveHost'
+	)) {
+		if (Test-Path -LiteralPath (Get-TlcPkgPath $relativePath)) { throw "Unused vulnerable Visual Studio component remains: $relativePath" }
+	}
+
     Write-Host '--- Testing config default ---'
     Toolchain exec (Get-TlcPkgUri) {
         $testC = Join-Path $env:TEMP 'tlc_msvc_smoketest.c'

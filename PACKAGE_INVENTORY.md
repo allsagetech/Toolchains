@@ -3,8 +3,8 @@
 This file is generated from package descriptors. Run `./scripts/export-package-inventory.ps1` after changing `src/pkgs`.
 
 - Descriptors: 103
-- Publication eligible: 103
-- Quarantined: 0
+- Publication eligible: 100
+- Quarantined: 3
 
 | Package | Canonical name | Platform | Tier | Publication | Source |
 | --- | --- | --- | --- | --- | --- |
@@ -69,11 +69,11 @@ This file is generated from package descriptors. Run `./scripts/export-package-i
 | nasm | nasm | windows/amd64 | tooling | eligible | `src/pkgs/nasm.ps1` |
 | nats-server | nats-server | windows/amd64 | tooling | eligible | `src/pkgs/nats-server.ps1` |
 | ninja | ninja | windows/amd64 | tooling | eligible | `src/pkgs/ninja.ps1` |
-| node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node18.ps1` |
-| node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node20.ps1` |
+| node | node | windows/amd64 | tooling | quarantined: Node.js 18 is end-of-life and no longer receives upstream security fixes. | `src/pkgs/node/node18.ps1` |
+| node | node | windows/amd64 | tooling | quarantined: Node.js 20 is end-of-life and no longer receives upstream security fixes. | `src/pkgs/node/node20.ps1` |
 | node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node22.ps1` |
 | node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node24.ps1` |
-| node | node | windows/amd64 | tooling | eligible | `src/pkgs/node/node25.ps1` |
+| node | node | windows/amd64 | tooling | quarantined: Node.js 25 is end-of-life and no longer receives upstream security fixes. | `src/pkgs/node/node25.ps1` |
 | notepadpp | notepadpp | windows/amd64 | tooling | eligible | `src/pkgs/notepadplus.ps1` |
 | obsidian | obsidian | windows/amd64 | tooling | eligible | `src/pkgs/obsidian.ps1` |
 | openai-gpt-oss-20b | openai-gpt-oss-20b | linux/amd64 | model-large | eligible | `src/pkgs/openai-gpt-oss-20b.ps1` |
