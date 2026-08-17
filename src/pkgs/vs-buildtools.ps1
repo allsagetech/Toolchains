@@ -95,6 +95,7 @@ function global:Install-TlcPackage {
         Replace('reg query "%1\Microsoft\VisualStudio\SxS\VC7" /v "14.0"', 'echo 14.0 X %~dp0..\..\..\..\..\..\..\..\Microsoft Visual Studio 14.0\VC\'))
 
 	$unusedAncillaryPaths = @(
+		'Microsoft SDKs\NuGetPackages\coverlet.collector'
 		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\Identity\ServiceHub\IdentityService'
 		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow'
 		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\VBCSharp\LanguageServices\InteractiveHost'
@@ -167,6 +168,7 @@ function global:Install-TlcPackage {
 
 function global:Test-TlcPackageInstall {
 	foreach ($relativePath in @(
+		'Microsoft SDKs\NuGetPackages\coverlet.collector'
 		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\Identity\ServiceHub\IdentityService'
 		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow'
 		'Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\VBCSharp\LanguageServices\InteractiveHost'

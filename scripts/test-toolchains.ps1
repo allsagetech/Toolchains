@@ -511,7 +511,7 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($vsBuildToolsText.Contains('${env:ProgramFiles(x86)}\Microsoft SDKs')) 'Visual Studio Build Tools omits an SDK directory referenced by its generated PATH contract.'
 	Assert-True ($vsBuildToolsText -match 'ConvertTo-TlcCanonicalPathList\s+-Value\s+\$value\s+-ContainedRoot') 'Visual Studio Build Tools does not canonicalize generated path-list variables before writing its package contract.'
 	Assert-True ($vsBuildToolsText -match 'BuildRevision = 1' -and $vsBuildToolsText -match 'unusedAncillaryPaths') 'Visual Studio Build Tools does not remove unused vulnerable IDE components in a republishable revision.'
-	foreach ($removedPath in @('Identity\\ServiceHub\\IdentityService', 'Microsoft\\TestWindow', 'LanguageServices\\InteractiveHost')) {
+	foreach ($removedPath in @('NuGetPackages\\coverlet\.collector', 'Identity\\ServiceHub\\IdentityService', 'Microsoft\\TestWindow', 'LanguageServices\\InteractiveHost')) {
 		Assert-True ($vsBuildToolsText -match $removedPath) "Visual Studio Build Tools does not remove vulnerable ancillary path $removedPath."
 	}
 	Assert-True (($vsBuildToolsText | Select-String -Pattern 'Invoke-TlcNativeCommand' -AllMatches).Matches.Count -ge 3 -and $vsBuildToolsText -notmatch '& cl\.exe') 'Visual Studio Build Tools exposes successful compiler or Docker diagnostics as package errors.'
