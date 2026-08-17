@@ -56,10 +56,10 @@ Describe 'Signed package alias rollback' {
 		$global:RollbackCreateCalls | Should -Be 0
 	}
 
-	It 'accepts an SPDX attestation stored in the standardized bundle format' {
+	It 'accepts a signed SBOM reference attestation for an external SPDX artifact' {
 		function global:cosign {
 			$global:RollbackCosignCalls++
-			$isLegacySbomAttempt = $args -contains 'spdxjson' -and $args -notcontains '--new-bundle-format=true'
+			$isLegacySbomAttempt = $args -contains 'spdxjson'
 			$global:LASTEXITCODE = if ($isLegacySbomAttempt) { 1 } else { 0 }
 		}
 		$result = & $script:rollback -Repository owner/repo -Package demo -Version 1.2.3 -AliasTag demo-stable -ExpectedDigest $global:RollbackTarget -Confirm:$false

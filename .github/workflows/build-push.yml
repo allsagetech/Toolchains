@@ -900,10 +900,13 @@ jobs:
           "digest=$(($repoDigest -split '@',2)[1])" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Sign and attest the published digest
+        id: sign
         if: steps.pkg.outputs.up-to-date == 'False'
         shell: pwsh
         env:
           DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:DIGEST_REF) { throw 'Published digest reference is empty.' }
@@ -928,15 +931,64 @@ jobs:
             }
           }
 
+          $sbomPath = "artifacts/$env:PACKAGE_NAME.spdx.json"
+          $sbomReferencePath = "artifacts/$env:PACKAGE_NAME.sbom-reference.json"
+          $sbomReferenceType = 'https://allsagetech.com/toolchains/attestations/sbom-reference/v1'
+          $safeVersion = $env:PACKAGE_VERSION.Replace('+', '_')
+          $sbomTag = "$env:TLC_DOCKER_REPO`:sbom-v1-$env:PACKAGE_NAME-$safeVersion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $imageDigest = ($env:DIGEST_REF -split '@sha256:', 2)[1]
+          if ($imageDigest -notmatch '^[0-9a-f]{64}$') { throw 'Published image digest is invalid.' }
+
+          # The public Rekor v1 service limits attestation requests to 100 KB.
+          # Preserve the complete SPDX document as a durable OCI blob, sign that
+          # artifact, and bind its immutable digest and content hash to the image
+          # with a compact reference attestation that fits the transparency log.
+          $sbomUploadOutput = @(Invoke-CosignPublication -Description 'cosign SBOM artifact upload' `
+            -ArgumentList @(
+              'upload', 'blob', '--ct', 'application/spdx+json',
+              '-a', "org.opencontainers.image.title=$env:PACKAGE_NAME.spdx.json",
+              '-a', "io.allsagetech.toolchains.image.digest=sha256:$imageDigest",
+              '-f', $sbomPath, $sbomTag
+            ))
+          $digestPattern = "$([regex]::Escape($env:TLC_DOCKER_REPO))@sha256:[0-9a-f]{64}"
+          $sbomDigestRefs = @([regex]::Matches(($sbomUploadOutput -join "`n"), $digestPattern) | ForEach-Object Value | Select-Object -Unique)
+          if ($sbomDigestRefs.Count -ne 1) {
+            throw "Could not resolve one immutable SBOM artifact digest from cosign upload blob output."
+          }
+          $sbomDigestRef = $sbomDigestRefs[0]
+          $sbomArtifactDigest = ($sbomDigestRef -split '@sha256:', 2)[1]
+
+          $sbomDocument = Get-Content -LiteralPath $sbomPath -Raw | ConvertFrom-Json
+          $documentNamespace = [string]$sbomDocument.documentNamespace
+          if ($documentNamespace -notmatch '^https://') { throw 'SPDX document namespace is invalid.' }
+          $sbomContentDigest = (Get-FileHash -LiteralPath $sbomPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sbomSize = (Get-Item -LiteralPath $sbomPath).Length
+          if ($sbomSize -le 0) { throw 'SPDX document is empty.' }
+          [ordered]@{
+            schemaVersion = 1
+            sbom = [ordered]@{
+              artifact = [ordered]@{
+                uri = "oci://$sbomDigestRef"
+                digest = @{ sha256 = $sbomArtifactDigest }
+              }
+              content = [ordered]@{
+                mediaType = 'application/spdx+json'
+                digest = @{ sha256 = $sbomContentDigest }
+                size = $sbomSize
+                documentNamespace = $documentNamespace
+              }
+            }
+          } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $sbomReferencePath -Encoding utf8
+
+          Invoke-CosignPublication -Description 'cosign SBOM artifact sign' `
+            -ArgumentList @('sign', '--yes', $sbomDigestRef)
           Invoke-CosignPublication -Description 'cosign sign' `
             -ArgumentList @('sign', '--yes', $env:DIGEST_REF)
-          # Rekor v1 rejects attestations over 100 KB. Cosign's standardized
-          # bundle path uses the TUF signing configuration and Rekor v2's
-          # hash-based log entry, preserving the complete SPDX document.
-          Invoke-CosignPublication -Description 'cosign SBOM attestation' `
-            -ArgumentList @('attest', '--yes', '--new-bundle-format=true', '--use-signing-config=true', '--type', 'spdxjson', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.spdx.json', $env:DIGEST_REF)
+          Invoke-CosignPublication -Description 'cosign SBOM reference attestation' `
+            -ArgumentList @('attest', '--yes', '--type', $sbomReferenceType, '--predicate', $sbomReferencePath, $env:DIGEST_REF)
           Invoke-CosignPublication -Description 'cosign provenance attestation' `
             -ArgumentList @('attest', '--yes', '--type', 'slsaprovenance', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json', $env:DIGEST_REF)
+          "sbom-digest-ref=$sbomDigestRef" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Verify signature and attestations fail closed
         if: steps.pkg.outputs.up-to-date == 'False'
@@ -944,12 +996,14 @@ jobs:
         timeout-minutes: 6
         env:
           DIGEST_REF: ${{ steps.publish.outputs.digest-ref }}
+          SBOM_DIGEST_REF: ${{ steps.sign.outputs.sbom-digest-ref }}
         run: |
           $ErrorActionPreference = 'Stop'
           $identity = "https://github.com/$env:GITHUB_WORKFLOW_REF"
           $issuer = 'https://token.actions.githubusercontent.com'
           ./.github/scripts/Test-CosignEvidence.ps1 `
             -DigestRef $env:DIGEST_REF `
+            -SbomDigestRef $env:SBOM_DIGEST_REF `
             -CertificateIdentity $identity `
             -CertificateOidcIssuer $issuer
 
@@ -1086,6 +1140,7 @@ jobs:
           name: release-evidence-${{ steps.pkg.outputs.name }}-${{ github.run_attempt }}
           path: |
             artifacts/${{ steps.pkg.outputs.name }}.spdx.json
+            artifacts/${{ steps.pkg.outputs.name }}.sbom-reference.json
             artifacts/${{ steps.pkg.outputs.name }}.provenance.json
             artifacts/${{ steps.pkg.outputs.name }}.trivy.sarif
             artifacts/${{ steps.pkg.outputs.name }}.health.json

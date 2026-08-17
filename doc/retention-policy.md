@@ -1,9 +1,10 @@
 <!-- Toolchains | SPDX-License-Identifier: MPL-2.0 -->
 # Retention policy
 
-Immutable package version tags, platform indexes, signatures, SPDX SBOM
-attestations, SLSA provenance, and signed health catalogs are durable release
-records. Workflows do not delete or overwrite them. Rollback moves only an
+Immutable package version tags, platform indexes, signatures, full SPDX SBOM
+artifacts, their digest-bound reference attestations, SLSA provenance, and
+signed health catalogs are durable release records. Workflows do not delete or
+overwrite them. Rollback moves only an
 explicit `package-latest` or `package-stable` alias after verifying the selected
 immutable digest.
 

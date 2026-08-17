@@ -47,7 +47,7 @@ function Invoke-RollbackCosignVerification {
 	& cosign @Arguments | Out-Null
 	if ($LASTEXITCODE -eq 0) { return }
 	if ($FallbackArguments) {
-		Write-Verbose "Retrying Cosign verification with the standardized bundle format."
+		Write-Verbose "Retrying Cosign verification with the signed SBOM reference attestation."
 		& cosign @FallbackArguments | Out-Null
 		if ($LASTEXITCODE -eq 0) { return }
 	}
@@ -56,7 +56,7 @@ function Invoke-RollbackCosignVerification {
 Invoke-RollbackCosignVerification -Arguments (@('verify') + $identityArguments + $digestRef)
 Invoke-RollbackCosignVerification `
 	-Arguments (@('verify-attestation','--type','spdxjson') + $identityArguments + $digestRef) `
-	-FallbackArguments (@('verify-attestation','--new-bundle-format=true','--type','spdxjson') + $identityArguments + $digestRef)
+	-FallbackArguments (@('verify-attestation','--type','https://allsagetech.com/toolchains/attestations/sbom-reference/v1') + $identityArguments + $digestRef)
 Invoke-RollbackCosignVerification -Arguments (@('verify-attestation','--type','slsaprovenance') + $identityArguments + $digestRef)
 
 $previousDigest = $null
