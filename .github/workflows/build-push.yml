@@ -992,9 +992,18 @@ jobs:
           $platformSlug = $env:PLATFORM.Replace('/', '-')
           $leafTag = "$env:TLC_DOCKER_REPO`:tlc-platform-v1-$platformSlug--$env:CANONICAL_NAME--$safeVersion"
           $immutableTag = "$env:TLC_DOCKER_REPO`:$env:PACKAGE_NAME-$safeVersion"
-          $manifest = (& docker manifest inspect --verbose $immutableTag | Out-String).Trim() | ConvertFrom-Json
+          $manifestEntries = @((& docker manifest inspect --verbose $immutableTag | Out-String).Trim() | ConvertFrom-Json)
           if ($LASTEXITCODE -ne 0) { throw "could not inspect immutable package tag $immutableTag" }
-          $sourceDigest = [string]$manifest.Descriptor.digest
+          $platformParts = @($env:PLATFORM.Split('/'))
+          if ($platformParts.Count -ne 2) { throw "invalid package platform $env:PLATFORM" }
+          $platformManifests = @($manifestEntries | Where-Object {
+            [string]$_.Descriptor.platform.os -ceq $platformParts[0] -and
+            [string]$_.Descriptor.platform.architecture -ceq $platformParts[1]
+          })
+          if ($platformManifests.Count -ne 1) {
+            throw "immutable package tag $immutableTag contains $($platformManifests.Count) manifests for $env:PLATFORM"
+          }
+          $sourceDigest = [string]$platformManifests[0].Descriptor.digest
           if ($sourceDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw "invalid digest for immutable package tag $immutableTag" }
           if ($env:PUBLISHED_DIGEST -and $sourceDigest -cne $env:PUBLISHED_DIGEST) {
             throw "immutable package tag digest changed before platform alias publication"
