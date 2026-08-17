@@ -288,6 +288,63 @@ function Initialize-TlcK9sPackage {
 	}
 }
 
+function Initialize-TlcCosignPackage {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[switch]$Linux
+	)
+
+	$global:TlcPackageConfig = @{
+		Name = $Name
+		CanonicalName = 'cosign'
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
+		Upstream = 'https://github.com/sigstore/cosign'
+		BuildRevision = 1
+		GoToolchain = 'go1.26.6'
+		PatchedTextVersion = 'v0.39.0'
+		PatchedGrpcVersion = 'v1.82.1'
+		IsLinux = [bool]$Linux
+	}
+	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
+
+	function global:Install-TlcPackage {
+		$latest = Get-GitHubTag -Owner 'sigstore' -Repo 'cosign' -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+		$upstreamVersion = $latest.Version.ToString()
+		$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+		$TlcPackageConfig.Version = $packageVersion.ToString()
+		$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+		if ($TlcPackageConfig.UpToDate) { return }
+
+		$outputName = if ($TlcPackageConfig.IsLinux) { 'cosign' } else { 'cosign.exe' }
+		$executable = Get-TlcPkgPath $outputName
+		$ldflags = "-buildid= -s -w -X sigs.k8s.io/release-utils/version.gitVersion=$($latest.Name) -X sigs.k8s.io/release-utils/version.gitTreeState=clean"
+		Invoke-TlcVerifiedGoCommandBuild `
+			-Module 'github.com/sigstore/cosign/v3' `
+			-Version ([string]$latest.Name) `
+			-Command 'github.com/sigstore/cosign/v3/cmd/cosign' `
+			-OutputPath $executable `
+			-MinimumModules @{
+				'golang.org/x/text' = $TlcPackageConfig.PatchedTextVersion
+				'google.golang.org/grpc' = $TlcPackageConfig.PatchedGrpcVersion
+			} `
+			-GoToolchain $TlcPackageConfig.GoToolchain `
+			-LdFlags $ldflags
+
+		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "patched Cosign source build did not produce $outputName" }
+		if ($TlcPackageConfig.IsLinux) {
+			& chmod '+x' $executable
+			if ($LASTEXITCODE -ne 0) { throw 'failed to mark cosign executable' }
+		}
+		Write-TlcVars @{ env = @{ path = Get-TlcPkgRoot } }
+	}
+
+	function global:Test-TlcPackageInstall {
+		Toolchain exec (Get-TlcPkgUri) {
+			cosign version
+		}
+	}
+}
+
 function Initialize-TlcKubectlPackage {
 	param(
 		[Parameter(Mandatory=$true)][string]$Name,

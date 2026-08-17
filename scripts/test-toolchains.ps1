@@ -642,6 +642,15 @@ function Test-ProductionReadinessPolicies {
 		$k9sText = Get-Content -LiteralPath $k9sScript -Raw
 		Assert-True ($k9sText -match 'Initialize-TlcK9sPackage') "$k9sScript bypasses the shared verified source build."
 	}
+	Assert-True ($familyText -match 'Initialize-TlcCosignPackage[\s\S]+?BuildRevision = 1[\s\S]+?Invoke-TlcVerifiedGoCommandBuild') 'Shared Cosign source build does not carry a republishable package revision.'
+	Assert-True ($familyText -match 'Initialize-TlcCosignPackage[\s\S]+?GoToolchain = ''go1\.26\.6''') 'Shared Cosign source build does not pin the fixed Go toolchain.'
+	Assert-True ($familyText -match 'Initialize-TlcCosignPackage[\s\S]+?PatchedTextVersion = ''v0\.39\.0''') 'Shared Cosign source build does not pin the fixed x/text version.'
+	Assert-True ($familyText -match 'Initialize-TlcCosignPackage[\s\S]+?PatchedGrpcVersion = ''v1\.82\.1''') 'Shared Cosign source build does not pin the fixed gRPC version.'
+	Assert-True ($familyText -match 'version\.gitVersion=\$\(\$latest\.Name\)') 'Shared Cosign source build does not preserve the upstream version contract.'
+	foreach ($cosignScript in @('.\src\pkgs\cosign.ps1', '.\src\pkgs\cosign-linux.ps1')) {
+		$cosignText = Get-Content -LiteralPath $cosignScript -Raw
+		Assert-True ($cosignText -match 'Initialize-TlcCosignPackage') "$cosignScript bypasses the shared verified source build."
+	}
 	$cueText = Get-Content -LiteralPath .\src\pkgs\cue.ps1 -Raw
 	Assert-True ($cueText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Cue still packages the vulnerable upstream binary.'
 	Assert-True ($cueText -match "PatchedTextVersion = 'v0\.39\.0'") 'Cue does not require the fixed golang.org/x/text version.'
