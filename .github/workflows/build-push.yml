@@ -907,12 +907,33 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:DIGEST_REF) { throw 'Published digest reference is empty.' }
-          cosign sign --yes $env:DIGEST_REF
-          if ($LASTEXITCODE -ne 0) { throw 'cosign sign failed.' }
-          cosign attest --yes --type spdxjson --predicate 'artifacts/${{ steps.pkg.outputs.name }}.spdx.json' $env:DIGEST_REF
-          if ($LASTEXITCODE -ne 0) { throw 'cosign SBOM attestation failed.' }
-          cosign attest --yes --type slsaprovenance --predicate 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json' $env:DIGEST_REF
-          if ($LASTEXITCODE -ne 0) { throw 'cosign provenance attestation failed.' }
+          function Invoke-CosignPublication {
+            param(
+              [Parameter(Mandatory)][string[]]$ArgumentList,
+              [Parameter(Mandatory)][string]$Description
+            )
+
+            $maxAttempts = 3
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              & cosign @ArgumentList
+              $exitCode = $LASTEXITCODE
+              if ($exitCode -eq 0) { return }
+              if ($attempt -eq $maxAttempts) {
+                throw "$Description failed with exit code $exitCode after $maxAttempts attempts."
+              }
+
+              $delaySeconds = 10 * $attempt
+              Write-Warning "$Description attempt $attempt failed with exit code $exitCode; retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+
+          Invoke-CosignPublication -Description 'cosign sign' `
+            -ArgumentList @('sign', '--yes', $env:DIGEST_REF)
+          Invoke-CosignPublication -Description 'cosign SBOM attestation' `
+            -ArgumentList @('attest', '--yes', '--type', 'spdxjson', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.spdx.json', $env:DIGEST_REF)
+          Invoke-CosignPublication -Description 'cosign provenance attestation' `
+            -ArgumentList @('attest', '--yes', '--type', 'slsaprovenance', '--predicate', 'artifacts/${{ steps.pkg.outputs.name }}.provenance.json', $env:DIGEST_REF)
 
       - name: Verify signature and attestations fail closed
         if: steps.pkg.outputs.up-to-date == 'False'
