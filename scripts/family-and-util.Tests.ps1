@@ -163,6 +163,43 @@ Describe 'Package family lifecycle helpers' {
 		$global:TlcPackageConfig.UpToDate | Should -BeTrue
 	}
 
+	It 'builds Crane from verified source with platform and version contracts' {
+		$hostIsLinux = -not (Test-TlcHostIsWindows)
+		$name = if ($hostIsLinux) { 'crane-linux' } else { 'crane' }
+		Initialize-TlcCranePackage -Name $name -Linux:$hostIsLinux
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('0.21.8')
+		Mock Get-GitHubTag { @{ Name = 'v0.21.9'; Version = [TlcSemanticVersion]::new('0.21.9') } }
+		Mock Invoke-TlcVerifiedGoCommandBuild {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
+			[IO.File]::WriteAllText($OutputPath, 'fixture')
+		}
+		Mock Write-TlcVars {}
+		Mock Toolchain {}
+
+		Install-TlcPackage
+		Test-TlcPackageInstall
+
+		$global:TlcPackageConfig.Version | Should -Be '0.21.9+1'
+		$global:TlcPackageConfig.Platform | Should -Be $(if ($hostIsLinux) { 'linux/amd64' } else { 'windows/amd64' })
+		$global:TlcPackageConfig.UpToDate | Should -BeFalse
+		Test-Path -LiteralPath (Join-Path $env:TLC_PKG_ROOT $(if ($hostIsLinux) { 'crane' } else { 'crane.exe' })) | Should -BeTrue
+		Should -Invoke Invoke-TlcVerifiedGoCommandBuild -Times 1 -Exactly -ParameterFilter {
+			$Module -eq 'github.com/google/go-containerregistry' -and
+			$Version -eq 'v0.21.9' -and
+			$Command -eq 'github.com/google/go-containerregistry/cmd/crane' -and
+			$GoToolchain -eq 'go1.26.6' -and
+			$LdFlags -match 'cmd/crane/cmd\.Version=0\.21\.9' -and
+			$LdFlags -match 'remote/transport\.Version=0\.21\.9'
+		}
+		Should -Invoke Write-TlcVars -Times 1 -Exactly
+		Should -Invoke Toolchain -Times 1 -Exactly
+
+		Initialize-TlcCranePackage -Name 'crane-current' -Linux:(-not $hostIsLinux)
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('0.21.9+1')
+		Install-TlcPackage
+		$global:TlcPackageConfig.UpToDate | Should -BeTrue
+	}
+
 	It 'installs a checksum-verified direct GitHub CLI asset' {
 		Initialize-TlcGitHubCliPackage -Name 'fixture' -CanonicalName 'fixture' -Owner owner -Repo repo -AssetPattern '^fixture$' -BinaryName 'fixture.exe' -ArchiveType direct
 		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('1.0.0')
