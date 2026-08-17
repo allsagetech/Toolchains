@@ -601,6 +601,9 @@ function Test-ProductionReadinessPolicies {
 	$codexPackageText = Get-Content -LiteralPath .\src\pkgs\codex.ps1 -Raw
 	Assert-True ($codexPackageText -match 'codex-package-x86_64-pc-windows-msvc\\\.tar\\\.gz' -and $codexPackageText -match 'ExpectedSha256' -and $codexPackageText -match 'codex-package\.json') 'Codex does not install the verified native upstream package.'
 	Assert-True ($codexPackageText -notmatch 'nodejs|npm install|@openai%2Fcodex/latest') 'Codex still bundles the vulnerable Node/npm installation stack.'
+	$cmakeConverterText = Get-Content -LiteralPath .\src\pkgs\cmake-converter.ps1 -Raw
+	Assert-True ($cmakeConverterText -match 'PIP_DISABLE_PIP_VERSION_CHECK' -and $cmakeConverterText -match 'Invoke-TlcNativeCommand') 'CMake Converter can fail its isolated lifecycle on benign native stderr.'
+	Assert-True ($cmakeConverterText -notmatch '--trusted-host') 'CMake Converter bypasses normal pip TLS hostname validation.'
 	foreach ($gradleMajor in @(7, 8)) {
 		$gradlePath = ".\src\pkgs\gradle\gradle$gradleMajor.ps1"
 		$gradleText = Get-Content -LiteralPath $gradlePath -Raw

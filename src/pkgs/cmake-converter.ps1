@@ -16,20 +16,37 @@ function global:Install-TlcPackage {
   Set-Content $BatFile @"
 @echo off
 
-python -c "import cmake_converter" 2> NUL || python -m pip install --trusted-host pypi.org cmake_converter --quiet --exists-action i
+python -c "import cmake_converter" 2> NUL || python -m pip install cmake_converter --quiet --exists-action i --disable-pip-version-check
 python -m cmake_converter.main %*
 "@
 
-  $ErrorActionPreference = 'Stop'
+  $python = Get-TlcApplicationPath -Name 'python'
+  $oldPipVersionCheck = $env:PIP_DISABLE_PIP_VERSION_CHECK
+  try {
+    $env:PIP_DISABLE_PIP_VERSION_CHECK = '1'
+    try {
+      Invoke-TlcNativeCommand -FilePath $python -ArgumentList @('-c', 'import cmake_converter') `
+        -FailureMessage 'cmake-converter import probe failed'
+    } catch {
+      Invoke-TlcNativeCommand -FilePath $python `
+        -ArgumentList @('-m', 'pip', 'install', 'cmake_converter', '--quiet', '--exists-action', 'i', '--disable-pip-version-check') `
+        -FailureMessage 'cmake-converter installation failed'
+    }
 
-  $scriptsDir = & python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
-  if ($scriptsDir) { $env:PATH = "$scriptsDir;$env:PATH" }
+    $scriptsDir = (Invoke-TlcNativeCommand -FilePath $python `
+      -ArgumentList @('-c', "import sysconfig; print(sysconfig.get_path('scripts'))") `
+      -FailureMessage 'Python scripts-directory discovery failed' -PassThru).Trim()
+    if ($scriptsDir) { $env:PATH = "$scriptsDir;$env:PATH" }
 
-  & $BatFile --help | Out-Null
+    Invoke-TlcNativeCommand -FilePath $python -ArgumentList @('-m', 'cmake_converter.main', '--help') `
+      -FailureMessage 'cmake-converter help probe failed'
 
-  $ver = (& python -m pip show cmake-converter 2>$null | Select-String -Pattern '^Version:\s*(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
-  if (-not $ver) {
-    $ver = (& python -m pip show cmake_converter 2>$null | Select-String -Pattern '^Version:\s*(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
+    $pipShow = Invoke-TlcNativeCommand -FilePath $python `
+      -ArgumentList @('-m', 'pip', 'show', 'cmake-converter', '--disable-pip-version-check') `
+      -FailureMessage 'cmake-converter version discovery failed' -PassThru
+    $ver = ($pipShow | Select-String -Pattern '^Version:\s*(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
+  } finally {
+    $env:PIP_DISABLE_PIP_VERSION_CHECK = $oldPipVersionCheck
   }
   if (-not $ver) { throw "Could not determine cmake-converter version via pip." }
 
