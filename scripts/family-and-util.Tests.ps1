@@ -142,6 +142,26 @@ Describe 'Package family lifecycle helpers' {
 			Should -Throw
 	}
 
+	It 'extracts verified tar archives only when paths and entry types are safe' {
+		$global:TlcFixtureTarEntries = @('package/', 'package/package.json')
+		$global:TlcFixtureTarDetails = @('-rw-r--r-- package/package.json')
+		$global:TlcFixtureTarName = 'fixture'
+		$global:TlcFixtureTarVersion = '1.0.0'
+		Mock Get-TlcApplicationPath { 'Invoke-TlcFixtureTar' } -ParameterFilter { $Name -eq 'tar' }
+		$destination = Join-Path $script:TempRoot 'verified-archive'
+
+		Expand-TlcVerifiedTarGzArchive -Path (Join-Path $script:TempRoot 'fixture.tar.gz') -Destination $destination
+		Test-Path -LiteralPath (Join-Path $destination 'package/package.json') -PathType Leaf | Should -BeTrue
+
+		$global:TlcFixtureTarEntries = @('../escape')
+		{ Expand-TlcVerifiedTarGzArchive -Path (Join-Path $script:TempRoot 'unsafe.tar.gz') -Destination $destination } |
+			Should -Throw '*unsafe path*'
+		$global:TlcFixtureTarEntries = @('package/link')
+		$global:TlcFixtureTarDetails = @('lrwxr-xr-x package/link -> ../../escape')
+		{ Expand-TlcVerifiedTarGzArchive -Path (Join-Path $script:TempRoot 'link.tar.gz') -Destination $destination } |
+			Should -Throw '*contains links*'
+	}
+
 	It 'short-circuits current Adoptium, K9s, and kubectl families' {
 		Initialize-TlcAdoptiumPackage -Kind jdk -Major 21 -IncludeX86
 		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('21.0.8')
@@ -198,6 +218,154 @@ Describe 'Package family lifecycle helpers' {
 		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('0.21.9+1')
 		Install-TlcPackage
 		$global:TlcPackageConfig.UpToDate | Should -BeTrue
+	}
+
+	It 'builds ORAS from verified source with platform and version contracts' {
+		$hostIsLinux = -not (Test-TlcHostIsWindows)
+		$name = if ($hostIsLinux) { 'oras-linux' } else { 'oras' }
+		Initialize-TlcOrasPackage -Name $name -Linux:$hostIsLinux
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('1.3.2')
+		Mock Get-GitHubTag { @{ Name = 'v1.3.3'; Version = [TlcSemanticVersion]::new('1.3.3') } }
+		Mock Invoke-TlcVerifiedGoCommandBuild {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
+			[IO.File]::WriteAllText($OutputPath, 'fixture')
+		}
+		Mock Write-TlcVars {}
+		Mock Toolchain {}
+
+		Install-TlcPackage
+		Test-TlcPackageInstall
+
+		$global:TlcPackageConfig.Version | Should -Be '1.3.3+1'
+		$global:TlcPackageConfig.Platform | Should -Be $(if ($hostIsLinux) { 'linux/amd64' } else { 'windows/amd64' })
+		$global:TlcPackageConfig.UpToDate | Should -BeFalse
+		Test-Path -LiteralPath (Join-Path $env:TLC_PKG_ROOT $(if ($hostIsLinux) { 'oras' } else { 'oras.exe' })) | Should -BeTrue
+		Should -Invoke Invoke-TlcVerifiedGoCommandBuild -Times 1 -Exactly -ParameterFilter {
+			$Module -eq 'oras.land/oras' -and
+			$Version -eq 'v1.3.3' -and
+			$Command -eq 'oras.land/oras/cmd/oras' -and
+			$GoToolchain -eq 'go1.26.6' -and
+			$LdFlags -match 'internal/version\.GitTreeState=clean'
+		}
+		Should -Invoke Write-TlcVars -Times 1 -Exactly
+		Should -Invoke Toolchain -Times 1 -Exactly
+
+		Initialize-TlcOrasPackage -Name 'oras-current' -Linux:(-not $hostIsLinux)
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('1.3.3+1')
+		Install-TlcPackage
+		$global:TlcPackageConfig.UpToDate | Should -BeTrue
+	}
+
+	It 'configures every remediated Go CLI family with secure build contracts' {
+		$families = @(
+			@{ Initialize = { Initialize-TlcArgoCdPackage -Name argocd }; Canonical = 'argocd'; Module = 'github.com/argoproj/argo-cd/v3'; Floors = 4; GitSource = $true },
+			@{ Initialize = { Initialize-TlcFluxPackage -Name flux }; Canonical = 'flux'; Module = 'github.com/fluxcd/flux2/v2'; Floors = 3 },
+			@{ Initialize = { Initialize-TlcKubesealPackage -Name kubeseal }; Canonical = 'kubeseal'; Module = 'github.com/bitnami/sealed-secrets'; Floors = 1 },
+			@{ Initialize = { Initialize-TlcSternPackage -Name stern }; Canonical = 'stern'; Module = 'github.com/stern/stern'; Floors = 2 },
+			@{ Initialize = { Initialize-TlcSyftPackage -Name syft }; Canonical = 'syft'; Module = 'github.com/anchore/syft'; Floors = 0 },
+			@{ Initialize = { Initialize-TlcTalosctlPackage -Name talosctl }; Canonical = 'talosctl'; Module = 'github.com/siderolabs/talos'; Floors = 0; GitSource = $true }
+		)
+		foreach ($family in $families) {
+			& $family.Initialize
+			$global:TlcPackageConfig.CanonicalName | Should -Be $family.Canonical
+			$global:TlcPackageConfig.GoModule | Should -Be $family.Module
+			$global:TlcPackageConfig.GoToolchain | Should -Be 'go1.26.6'
+			$global:TlcPackageConfig.BuildRevision | Should -Be 1
+			$global:TlcPackageConfig.MinimumModules.Count | Should -Be $family.Floors
+			$global:TlcPackageConfig.UseGitSource | Should -Be ([bool]$family.GitSource)
+		}
+		$global:TlcPackageConfig.UseGitSource | Should -BeTrue
+		$global:TlcPackageConfig.BuildTags | Should -Be 'grpcnotrace'
+
+		{ Initialize-TlcVerifiedGoCliPackage -Name fixture -CanonicalName fixture -Owner owner -Repo repo -Module example.test/fixture -Command example.test/fixture -BinaryName fixture.exe -EmbeddedAssetPattern asset } |
+			Should -Throw '*pattern and destination*'
+		{ Initialize-TlcVerifiedGoCliPackage -Name fixture -CanonicalName fixture -Owner owner -Repo repo -Module example.test/fixture -Command example.test/fixture -BinaryName fixture.exe -EmbeddedAssetPattern asset -EmbeddedRelativeDestination manifests } |
+			Should -Throw '*require a source-tree build*'
+		{ Initialize-TlcVerifiedGoCliPackage -Name fixture -CanonicalName fixture -Owner owner -Repo repo -Module example.test/fixture -Command example.test/fixture -BinaryName fixture.exe -UseModuleSource -UseGitSource } |
+			Should -Throw '*mutually exclusive*'
+	}
+
+	It 'builds a patched Go CLI family with source commit and dependency floors' {
+		$hostIsLinux = -not (Test-TlcHostIsWindows)
+		$name = if ($hostIsLinux) { 'stern-linux' } else { 'stern' }
+		Initialize-TlcSternPackage -Name $name -Linux:$hostIsLinux
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('1.33.0')
+		Mock Get-GitHubTag {
+			@{ Name = 'v1.34.0'; Version = [TlcSemanticVersion]::new('1.34.0'); CommitSha = ('a' * 40) }
+		}
+		Mock Invoke-TlcVerifiedGoCommandBuild {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
+			[IO.File]::WriteAllText($OutputPath, 'fixture')
+		}
+		Mock Write-TlcVars {}
+		Mock Toolchain {}
+
+		Install-TlcPackage
+		Test-TlcPackageInstall
+
+		$global:TlcPackageConfig.Version | Should -Be '1.34.0+1'
+		$global:TlcPackageConfig.UpToDate | Should -BeFalse
+		Should -Invoke Invoke-TlcVerifiedGoCommandBuild -Times 1 -Exactly -ParameterFilter {
+			$Module -eq 'github.com/stern/stern' -and
+			$Version -eq 'v1.34.0' -and
+			$Command -eq 'github.com/stern/stern' -and
+			$MinimumModules['golang.org/x/net'] -eq 'v0.56.0' -and
+			$MinimumModules['golang.org/x/text'] -eq 'v0.39.0' -and
+			$LdFlags -match 'cmd\.version=1\.34\.0' -and
+			$LdFlags -match ('cmd\.commit=' + ('a' * 40))
+		}
+		Should -Invoke Toolchain -Times 1 -Exactly
+
+		Initialize-TlcSyftPackage -Name syft-current
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('1.51.0+1')
+		Install-TlcPackage
+		$global:TlcPackageConfig.UpToDate | Should -BeTrue
+	}
+
+	It 'injects Flux checksum-verified release manifests into its module-source build' {
+		$hostIsLinux = -not (Test-TlcHostIsWindows)
+		$name = if ($hostIsLinux) { 'flux-linux' } else { 'flux' }
+		Initialize-TlcFluxPackage -Name $name -Linux:$hostIsLinux
+		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new('2.9.3')
+		Mock Get-GitHubTag {
+			@{ Name = 'v2.9.4'; Version = [TlcSemanticVersion]::new('2.9.4'); CommitSha = ('b' * 40) }
+		}
+		Mock Get-GitHubRelease {
+			if ($AssetPattern -eq '^manifests\.tar\.gz$') {
+				return @{ Name = 'manifests.tar.gz'; URL = 'https://github.com/fluxcd/flux2/releases/download/v2.9.4/manifests.tar.gz'; Version = [TlcSemanticVersion]::new('2.9.4') }
+			}
+			return @{ Name = 'flux_2.9.4_checksums.txt'; URL = 'https://example.test/checksums'; Version = [TlcSemanticVersion]::new('2.9.4') }
+		}
+		Mock Get-TlcGitHubReleaseAssetSha256 { $null }
+		Mock Get-TlcRemoteSha256 { 'c' * 64 }
+		Mock Invoke-TlcWebRequest {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutFile) -Force | Out-Null
+			[IO.File]::WriteAllText($OutFile, 'archive')
+		}
+		Mock Expand-TlcVerifiedTarGzArchive {
+			New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+			[IO.File]::WriteAllText((Join-Path $Destination 'source-controller.yaml'), 'fixture')
+		}
+		Mock Invoke-TlcVerifiedGoCommandBuild {
+			New-Item -ItemType Directory -Path (Split-Path -Parent $OutputPath) -Force | Out-Null
+			[IO.File]::WriteAllText($OutputPath, 'fixture')
+		}
+		Mock Write-TlcVars {}
+		Mock Toolchain {}
+
+		Install-TlcPackage
+		Test-TlcPackageInstall
+
+		$global:TlcPackageConfig.Version | Should -Be '2.9.4+1'
+		Should -Invoke Get-TlcRemoteSha256 -Times 1 -Exactly -ParameterFilter { $AssetName -eq 'manifests.tar.gz' }
+		Should -Invoke Invoke-TlcWebRequest -Times 1 -Exactly -ParameterFilter { $ExpectedSha256 -eq ('c' * 64) }
+		Should -Invoke Invoke-TlcVerifiedGoCommandBuild -Times 1 -Exactly -ParameterFilter {
+			$UseModuleSource -and
+			$EmbeddedFilesRelativeDestination -eq 'cmd/flux/manifests' -and
+			(Test-Path -LiteralPath (Join-Path $EmbeddedFilesPath 'source-controller.yaml')) -and
+			$MinimumModules['github.com/go-git/go-git/v5'] -eq 'v5.19.2' -and
+			$MinimumModules['google.golang.org/grpc'] -eq 'v1.82.1'
+		}
 	}
 
 	It 'installs a checksum-verified direct GitHub CLI asset' {

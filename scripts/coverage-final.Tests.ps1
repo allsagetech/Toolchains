@@ -113,12 +113,18 @@ Describe 'GitHub metadata fallbacks' {
 		$script:TagPage = 0
 		Mock Invoke-TlcRestMethod {
 			$script:TagPage++
-			if ($script:TagPage -eq 1) { return @([pscustomobject]@{ name = 'v1.0.0' }, [pscustomobject]@{ name = 'v1.5.0' }) }
+			if ($script:TagPage -eq 1) {
+				return @(
+					[pscustomobject]@{ name = 'v1.0.0'; commit = [pscustomobject]@{ sha = 'old' } },
+					[pscustomobject]@{ name = 'v1.5.0'; commit = [pscustomobject]@{ sha = 'abc123' } }
+				)
+			}
 			return @()
 		}
 		$result = Get-GitHubTag -Owner owner -Repo repo -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
 		$result.Name | Should -Be 'v1.5.0'
 		$result.Version.ToString() | Should -Be '1.5.0'
+		$result.CommitSha | Should -Be 'abc123'
 	}
 
 	It 'installs a Node distribution with its official checksum document' {

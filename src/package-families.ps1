@@ -4,6 +4,35 @@ Copyright (c) 2026 AllSageTech
 SPDX-License-Identifier: MPL-2.0
 #>
 
+function Expand-TlcVerifiedTarGzArchive {
+	param(
+		[Parameter(Mandatory=$true)][string]$Path,
+		[Parameter(Mandatory=$true)][string]$Destination
+	)
+
+	$tar = Get-TlcApplicationPath -Name 'tar'
+	$entries = @(& $tar '-tzf' $Path)
+	if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) { throw "Could not list verified archive $Path." }
+	foreach ($entry in $entries) {
+		$normalized = ([string]$entry).Replace('\', '/')
+		$segments = @($normalized.Split('/') | Where-Object { $_ -and $_ -ne '.' })
+		if ($segments -contains '..' -or $normalized.StartsWith('/') -or $normalized.Contains(':') -or $normalized.IndexOf([char]0) -ge 0) {
+			throw "verified archive contains an unsafe path: $entry"
+		}
+	}
+
+	$details = @(& $tar '-tvzf' $Path)
+	if ($LASTEXITCODE -ne 0) { throw "Could not inspect verified archive $Path." }
+	if (@($details | Where-Object { $_.TrimStart() -match '^[lh]' }).Count -gt 0) {
+		throw "verified archive contains links, which are not permitted: $Path"
+	}
+
+	if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
+	New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+	& $tar '-xzf' $Path '-C' $Destination
+	if ($LASTEXITCODE -ne 0) { throw "Could not extract verified archive $Path." }
+}
+
 function Install-TlcPinnedNpmArchive {
 	param(
 		[Parameter(Mandatory=$true)][ValidatePattern('^[a-z0-9][a-z0-9._-]*$')][string]$Name,
@@ -394,6 +423,257 @@ function Initialize-TlcCranePackage {
 			crane version
 		}
 	}
+}
+
+function Initialize-TlcOrasPackage {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[switch]$Linux
+	)
+
+	$global:TlcPackageConfig = @{
+		Name = $Name
+		CanonicalName = 'oras'
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
+		Upstream = 'https://github.com/oras-project/oras'
+		BuildRevision = 1
+		GoToolchain = 'go1.26.6'
+		IsLinux = [bool]$Linux
+	}
+	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
+
+	function global:Install-TlcPackage {
+		$latest = Get-GitHubTag -Owner 'oras-project' -Repo 'oras' -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+		$upstreamVersion = $latest.Version.ToString()
+		$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+		$TlcPackageConfig.Version = $packageVersion.ToString()
+		$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+		if ($TlcPackageConfig.UpToDate) { return }
+
+		$outputName = if ($TlcPackageConfig.IsLinux) { 'oras' } else { 'oras.exe' }
+		$executable = Get-TlcPkgPath $outputName
+		Invoke-TlcVerifiedGoCommandBuild `
+			-Module 'oras.land/oras' `
+			-Version ([string]$latest.Name) `
+			-Command 'oras.land/oras/cmd/oras' `
+			-OutputPath $executable `
+			-GoToolchain $TlcPackageConfig.GoToolchain `
+			-LdFlags '-s -w -X oras.land/oras/internal/version.GitTreeState=clean'
+
+		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "patched ORAS source build did not produce $outputName" }
+		if ($TlcPackageConfig.IsLinux) {
+			& chmod '+x' $executable
+			if ($LASTEXITCODE -ne 0) { throw 'failed to mark ORAS executable' }
+		}
+		Write-TlcVars @{ env = @{ path = Get-TlcPkgRoot } }
+	}
+
+	function global:Test-TlcPackageInstall {
+		Toolchain exec (Get-TlcPkgUri) {
+			oras version
+		}
+	}
+}
+
+function Initialize-TlcVerifiedGoCliPackage {
+	param(
+		[Parameter(Mandatory=$true)][string]$Name,
+		[Parameter(Mandatory=$true)][string]$CanonicalName,
+		[Parameter(Mandatory=$true)][string]$Owner,
+		[Parameter(Mandatory=$true)][string]$Repo,
+		[Parameter(Mandatory=$true)][string]$Module,
+		[Parameter(Mandatory=$true)][string]$Command,
+		[Parameter(Mandatory=$true)][string]$BinaryName,
+		[string[]]$VersionArguments = @('--version'),
+		[hashtable]$MinimumModules = @{},
+		[string]$BuildTags,
+		[string]$LdFlagsTemplate,
+		[switch]$UseModuleSource,
+		[switch]$UseGitSource,
+		[string]$EmbeddedAssetPattern,
+		[string]$EmbeddedChecksumAssetPattern,
+		[string]$EmbeddedRelativeDestination,
+		[switch]$Linux
+	)
+	if ([bool]$EmbeddedAssetPattern -xor [bool]$EmbeddedRelativeDestination) {
+		throw 'embedded asset pattern and destination must be supplied together'
+	}
+	if ($UseModuleSource -and $UseGitSource) { throw 'module-source and Git-source families are mutually exclusive' }
+	if ($EmbeddedAssetPattern -and -not ($UseModuleSource -or $UseGitSource)) {
+		throw 'embedded release assets require a source-tree build'
+	}
+
+	$global:TlcPackageConfig = @{
+		Name = $Name
+		CanonicalName = $CanonicalName
+		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
+		Upstream = "https://github.com/$Owner/$Repo"
+		BuildRevision = 1
+		GoToolchain = 'go1.26.6'
+		GitHubOwner = $Owner
+		GitHubRepo = $Repo
+		GoModule = $Module
+		GoCommand = $Command
+		BinaryName = $BinaryName
+		VersionArguments = @($VersionArguments)
+		MinimumModules = $MinimumModules
+		BuildTags = $BuildTags
+		LdFlagsTemplate = $LdFlagsTemplate
+		UseModuleSource = [bool]$UseModuleSource
+		UseGitSource = [bool]$UseGitSource
+		EmbeddedAssetPattern = $EmbeddedAssetPattern
+		EmbeddedChecksumAssetPattern = $EmbeddedChecksumAssetPattern
+		EmbeddedRelativeDestination = $EmbeddedRelativeDestination
+		IsLinux = [bool]$Linux
+	}
+	if ($Linux) { $global:TlcPackageConfig.RunsOn = 'ubuntu-22.04' }
+
+	function global:Install-TlcPackage {
+		$latest = Get-GitHubTag -Owner $TlcPackageConfig.GitHubOwner -Repo $TlcPackageConfig.GitHubRepo `
+			-TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+		$upstreamVersion = $latest.Version.ToString()
+		$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+		$TlcPackageConfig.Version = $packageVersion.ToString()
+		$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+		if ($TlcPackageConfig.UpToDate) { return }
+
+		$commitSha = [string]$latest.CommitSha
+		if ([string]$TlcPackageConfig.LdFlagsTemplate -match '\{commit\}' -and $commitSha -notmatch '^[0-9a-fA-F]{40}$') {
+			throw "could not verify the source commit for $($TlcPackageConfig.GitHubOwner)/$($TlcPackageConfig.GitHubRepo) $($latest.Name)"
+		}
+		$ldFlags = [string]$TlcPackageConfig.LdFlagsTemplate
+		if ($ldFlags) {
+			$ldFlags = $ldFlags.Replace('{version}', $upstreamVersion).Replace('{tag}', [string]$latest.Name).Replace('{commit}', $commitSha)
+		}
+
+		$embeddedFilesPath = $null
+		if ($TlcPackageConfig.EmbeddedAssetPattern) {
+			$asset = Get-GitHubRelease -Owner $TlcPackageConfig.GitHubOwner -Repo $TlcPackageConfig.GitHubRepo `
+				-AssetPattern $TlcPackageConfig.EmbeddedAssetPattern -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+			if ($asset.Version.ToString() -ne $upstreamVersion) {
+				throw "embedded release asset version $($asset.Version) does not match source version $upstreamVersion"
+			}
+			$expectedSha256 = Get-TlcGitHubReleaseAssetSha256 -Uri $asset.URL
+			if (-not $expectedSha256 -and $TlcPackageConfig.EmbeddedChecksumAssetPattern) {
+				$checksum = Get-GitHubRelease -Owner $TlcPackageConfig.GitHubOwner -Repo $TlcPackageConfig.GitHubRepo `
+					-AssetPattern $TlcPackageConfig.EmbeddedChecksumAssetPattern -TagPattern '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+				$expectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $checksum.URL -AssetName $asset.Name -Headers (Get-TlcGitHubHeaders)
+			}
+			if (-not $expectedSha256) { throw "no verified SHA-256 was published for $($asset.Name)" }
+
+			$assetStage = Get-TlcStagingPath "$($TlcPackageConfig.CanonicalName)-source-assets"
+			New-Item -ItemType Directory -Path $assetStage -Force | Out-Null
+			$archivePath = Join-Path $assetStage $asset.Name
+			Invoke-TlcWebRequest -Uri $asset.URL -OutFile $archivePath -ExpectedSha256 $expectedSha256 | Out-Null
+			$embeddedFilesPath = Join-Path $assetStage 'embedded'
+			Expand-TlcVerifiedTarGzArchive -Path $archivePath -Destination $embeddedFilesPath
+			$embeddedFiles = @(Get-ChildItem -LiteralPath $embeddedFilesPath -File -Force)
+			$embeddedDirectories = @(Get-ChildItem -LiteralPath $embeddedFilesPath -Directory -Force)
+			if ($embeddedFiles.Count -eq 0 -or $embeddedDirectories.Count -gt 0 -or @($embeddedFiles | Where-Object Extension -ne '.yaml').Count -gt 0) {
+				throw "embedded release asset $($asset.Name) does not contain only top-level YAML manifests"
+			}
+		}
+
+		$outputName = if ($TlcPackageConfig.IsLinux) { [IO.Path]::GetFileNameWithoutExtension([string]$TlcPackageConfig.BinaryName) } else { [string]$TlcPackageConfig.BinaryName }
+		$executable = Get-TlcPkgPath $outputName
+		$build = @{
+			Module = [string]$TlcPackageConfig.GoModule
+			Version = [string]$latest.Name
+			Command = [string]$TlcPackageConfig.GoCommand
+			OutputPath = $executable
+			MinimumModules = [hashtable]$TlcPackageConfig.MinimumModules
+			GoToolchain = [string]$TlcPackageConfig.GoToolchain
+		}
+		if ($TlcPackageConfig.BuildTags) { $build.BuildTags = [string]$TlcPackageConfig.BuildTags }
+		if ($ldFlags) { $build.LdFlags = $ldFlags }
+		if ($TlcPackageConfig.UseModuleSource) { $build.UseModuleSource = $true }
+		if ($TlcPackageConfig.UseGitSource) {
+			$build.UseGitSource = $true
+			$build.GitRepository = [string]$TlcPackageConfig.Upstream
+			$build.GitRef = [string]$latest.Name
+			$build.GitCommit = $commitSha
+		}
+		if ($embeddedFilesPath) {
+			$build.EmbeddedFilesPath = $embeddedFilesPath
+			$build.EmbeddedFilesRelativeDestination = [string]$TlcPackageConfig.EmbeddedRelativeDestination
+		}
+		Invoke-TlcVerifiedGoCommandBuild @build
+
+		if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "patched $($TlcPackageConfig.CanonicalName) source build did not produce $outputName" }
+		if ($TlcPackageConfig.IsLinux) {
+			& chmod '+x' $executable
+			if ($LASTEXITCODE -ne 0) { throw "failed to mark $($TlcPackageConfig.CanonicalName) executable" }
+		}
+		Write-TlcVars @{ env = @{ path = Get-TlcPkgRoot } }
+	}
+
+	function global:Test-TlcPackageInstall {
+		$commandName = [IO.Path]::GetFileNameWithoutExtension([string]$TlcPackageConfig.BinaryName)
+		$arguments = [string[]]@($TlcPackageConfig.VersionArguments)
+		Toolchain exec (Get-TlcPkgUri) {
+			$command = Get-Command $commandName -CommandType Application -ErrorAction Stop | Select-Object -First 1
+			& $command.Source @arguments
+			if ($LASTEXITCODE -ne 0) { throw "$commandName version check failed with exit code $LASTEXITCODE" }
+		}
+	}
+}
+
+function Initialize-TlcArgoCdPackage {
+	param([Parameter(Mandatory=$true)][string]$Name, [switch]$Linux)
+	Initialize-TlcVerifiedGoCliPackage -Name $Name -CanonicalName 'argocd' -Owner 'argoproj' -Repo 'argo-cd' `
+		-Module 'github.com/argoproj/argo-cd/v3' -Command 'github.com/argoproj/argo-cd/v3/cmd' -BinaryName 'argocd.exe' `
+		-VersionArguments @('version', '--client') -MinimumModules @{
+			'github.com/go-git/go-git/v5' = 'v5.19.2'
+			'golang.org/x/text' = 'v0.39.0'
+			'google.golang.org/grpc' = 'v1.82.1'
+			'oras.land/oras-go/v2' = 'v2.6.2'
+		} -LdFlagsTemplate '-s -w -X github.com/argoproj/argo-cd/v3/common.version={version} -X github.com/argoproj/argo-cd/v3/common.gitCommit={commit} -X github.com/argoproj/argo-cd/v3/common.gitTag={tag} -X github.com/argoproj/argo-cd/v3/common.gitTreeState=clean' `
+		-UseGitSource -Linux:$Linux
+}
+
+function Initialize-TlcFluxPackage {
+	param([Parameter(Mandatory=$true)][string]$Name, [switch]$Linux)
+	Initialize-TlcVerifiedGoCliPackage -Name $Name -CanonicalName 'flux' -Owner 'fluxcd' -Repo 'flux2' `
+		-Module 'github.com/fluxcd/flux2/v2' -Command 'github.com/fluxcd/flux2/v2/cmd/flux' -BinaryName 'flux.exe' `
+		-VersionArguments @('--version') -MinimumModules @{
+			'github.com/go-git/go-git/v5' = 'v5.19.2'
+			'golang.org/x/text' = 'v0.39.0'
+			'google.golang.org/grpc' = 'v1.82.1'
+		} -LdFlagsTemplate '-s -w -X main.VERSION={version}' -UseModuleSource `
+		-EmbeddedAssetPattern '^manifests\.tar\.gz$' -EmbeddedChecksumAssetPattern '^flux_[0-9.]+_checksums\.txt$' `
+		-EmbeddedRelativeDestination 'cmd/flux/manifests' -Linux:$Linux
+}
+
+function Initialize-TlcKubesealPackage {
+	param([Parameter(Mandatory=$true)][string]$Name, [switch]$Linux)
+	Initialize-TlcVerifiedGoCliPackage -Name $Name -CanonicalName 'kubeseal' -Owner 'bitnami-labs' -Repo 'sealed-secrets' `
+		-Module 'github.com/bitnami/sealed-secrets' -Command 'github.com/bitnami/sealed-secrets/cmd/kubeseal' -BinaryName 'kubeseal.exe' `
+		-VersionArguments @('--version') -MinimumModules @{ 'golang.org/x/text' = 'v0.39.0' } `
+		-LdFlagsTemplate '-s -w -X main.VERSION={version}' -Linux:$Linux
+}
+
+function Initialize-TlcSternPackage {
+	param([Parameter(Mandatory=$true)][string]$Name, [switch]$Linux)
+	Initialize-TlcVerifiedGoCliPackage -Name $Name -CanonicalName 'stern' -Owner 'stern' -Repo 'stern' `
+		-Module 'github.com/stern/stern' -Command 'github.com/stern/stern' -BinaryName 'stern.exe' `
+		-VersionArguments @('--version') -MinimumModules @{
+			'golang.org/x/net' = 'v0.56.0'
+			'golang.org/x/text' = 'v0.39.0'
+		} -LdFlagsTemplate '-s -w -X github.com/stern/stern/cmd.version={version} -X github.com/stern/stern/cmd.commit={commit}' -Linux:$Linux
+}
+
+function Initialize-TlcSyftPackage {
+	param([Parameter(Mandatory=$true)][string]$Name, [switch]$Linux)
+	Initialize-TlcVerifiedGoCliPackage -Name $Name -CanonicalName 'syft' -Owner 'anchore' -Repo 'syft' `
+		-Module 'github.com/anchore/syft' -Command 'github.com/anchore/syft/cmd/syft' -BinaryName 'syft.exe' `
+		-VersionArguments @('version') -LdFlagsTemplate '-s -w -X main.version={version} -X main.gitCommit={commit}' -Linux:$Linux
+}
+
+function Initialize-TlcTalosctlPackage {
+	param([Parameter(Mandatory=$true)][string]$Name, [switch]$Linux)
+	Initialize-TlcVerifiedGoCliPackage -Name $Name -CanonicalName 'talosctl' -Owner 'siderolabs' -Repo 'talos' `
+		-Module 'github.com/siderolabs/talos' -Command 'github.com/siderolabs/talos/cmd/talosctl' -BinaryName 'talosctl.exe' `
+		-VersionArguments @('version', '--client') -BuildTags 'grpcnotrace' -UseGitSource -Linux:$Linux
 }
 
 function Initialize-TlcKubectlPackage {

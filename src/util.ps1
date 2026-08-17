@@ -114,8 +114,26 @@ function Invoke-TlcVerifiedGoCommandBuild {
 		[string[]]$ForbiddenPackagePrefixes = @(),
 		[string]$GoToolchain = 'go1.26.6',
 		[string]$BuildTags,
-		[string]$LdFlags
+		[string]$LdFlags,
+		[switch]$UseModuleSource,
+		[switch]$UseGitSource,
+		[string]$GitRepository,
+		[string]$GitRef,
+		[string]$GitCommit,
+		[string]$EmbeddedFilesPath,
+		[string]$EmbeddedFilesRelativeDestination
 	)
+	if ($UseModuleSource -and $UseGitSource) { throw 'module-source and Git-source builds are mutually exclusive' }
+	$gitSourceParameters = @($GitRepository, $GitRef, $GitCommit) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+	if (($UseGitSource -and $gitSourceParameters.Count -ne 3) -or (-not $UseGitSource -and $gitSourceParameters.Count -gt 0)) {
+		throw 'Git-source builds require repository, ref, and commit together'
+	}
+	if ([bool]$EmbeddedFilesPath -xor [bool]$EmbeddedFilesRelativeDestination) {
+		throw 'embedded files path and relative destination must be supplied together'
+	}
+	if ($EmbeddedFilesPath -and -not ($UseModuleSource -or $UseGitSource)) {
+		throw 'embedded files require a source-tree build'
+	}
 
 	$buildRoot = Join-Path ([IO.Path]::GetTempPath()) "tlc-go-command-$([guid]::NewGuid().ToString('n'))"
 	$locationPushed = $false
@@ -138,18 +156,97 @@ function Invoke-TlcVerifiedGoCommandBuild {
 		$env:GOWORK = 'off'
 		$go = Get-TlcApplicationPath -Name 'go'
 
-		Push-Location $buildRoot
-		$locationPushed = $true
-		Invoke-TlcNativeCommand -FilePath $go `
-			-ArgumentList @('mod', 'init', "toolchains.local/patched-$([guid]::NewGuid().ToString('n'))") `
-			-FailureMessage 'Go module initialization failed'
+		$buildCommand = $Command
+		if ($UseModuleSource -or $UseGitSource) {
+			$sourceRoot = Join-Path $buildRoot 'source'
+			if ($UseModuleSource) {
+				$downloadText = Invoke-TlcNativeCommand -FilePath $go `
+					-ArgumentList @('mod', 'download', '-json', "$Module@$Version") `
+					-FailureMessage 'verified Go module download failed' -PassThru
+				$download = $downloadText | ConvertFrom-Json
+				if ([string]$download.Path -cne $Module -or [string]$download.Version -cne $Version) {
+					throw "downloaded Go module identity mismatch: expected $Module@$Version"
+				}
+				if ([string]$download.Sum -notmatch '^h1:[A-Za-z0-9+/=]+$' -or [string]$download.GoModSum -notmatch '^h1:[A-Za-z0-9+/=]+$') {
+					throw "Go module $Module@$Version was not verified by the checksum database"
+				}
+				if (-not (Test-Path -LiteralPath ([string]$download.Dir) -PathType Container)) {
+					throw "verified Go module source is unavailable for $Module@$Version"
+				}
+				Copy-Item -LiteralPath ([string]$download.Dir) -Destination $sourceRoot -Recurse -Force
+				Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Force | ForEach-Object {
+					if ($_.IsReadOnly) { $_.IsReadOnly = $false }
+				}
+			} else {
+				$repositoryUri = [Uri]$GitRepository
+				if ($repositoryUri.Scheme -ne 'https' -or $repositoryUri.Host -ne 'github.com' -or $repositoryUri.AbsolutePath -notmatch '^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$') {
+					throw "Git source repository is not a supported GitHub HTTPS repository: $GitRepository"
+				}
+				if ($GitCommit -notmatch '^[0-9a-fA-F]{40}$') { throw "Git source commit is not a full SHA-1: $GitCommit" }
+				$git = Get-TlcApplicationPath -Name 'git'
+				Invoke-TlcNativeCommand -FilePath $git `
+					-ArgumentList @('clone', '--depth', '1', '--branch', $GitRef, '--single-branch', '--filter=blob:none', $GitRepository, $sourceRoot) `
+					-FailureMessage 'verified Git source clone failed'
+				$resolvedCommit = (Invoke-TlcNativeCommand -FilePath $git `
+					-ArgumentList @('-C', $sourceRoot, 'rev-parse', 'HEAD') `
+					-FailureMessage 'verified Git source commit resolution failed' -PassThru).Trim()
+				if ($resolvedCommit -cne $GitCommit.ToLowerInvariant()) {
+					throw "Git source commit mismatch: expected $GitCommit, got $resolvedCommit"
+				}
+			}
 
-		$requirements = @("$Module@$Version")
-		foreach ($requiredModule in ($MinimumModules.Keys | Sort-Object)) {
-			$requirements += "$requiredModule@$($MinimumModules[$requiredModule])"
+			if ($Command -ceq $Module) { $buildCommand = '.' }
+			elseif ($Command.StartsWith("$Module/", [StringComparison]::Ordinal)) {
+				$buildCommand = '.' + $Command.Substring($Module.Length)
+			} elseif (-not $Command.StartsWith('./', [StringComparison]::Ordinal)) {
+				throw "module-source command must be contained by $Module`: $Command"
+			}
+
+			if ($EmbeddedFilesPath) {
+				if (-not (Test-Path -LiteralPath $EmbeddedFilesPath -PathType Container)) {
+					throw "embedded files directory does not exist: $EmbeddedFilesPath"
+				}
+				$normalizedDestination = $EmbeddedFilesRelativeDestination.Replace('\', '/')
+				$segments = @($normalizedDestination.Split('/') | Where-Object { $_ })
+				if ($normalizedDestination.StartsWith('/') -or $normalizedDestination -match '^[A-Za-z]:' -or $segments -contains '..' -or $normalizedDestination.IndexOf([char]0) -ge 0) {
+					throw "embedded files destination is unsafe: $EmbeddedFilesRelativeDestination"
+				}
+				$sourcePrefix = [IO.Path]::GetFullPath($sourceRoot).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+				$embeddedDestination = [IO.Path]::GetFullPath((Join-Path $sourceRoot $EmbeddedFilesRelativeDestination))
+				if (-not ($embeddedDestination + [IO.Path]::DirectorySeparatorChar).StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+					throw "embedded files destination escapes module source: $EmbeddedFilesRelativeDestination"
+				}
+				if (Test-Path -LiteralPath $embeddedDestination) { Remove-Item -LiteralPath $embeddedDestination -Recurse -Force }
+				New-Item -ItemType Directory -Path $embeddedDestination -Force | Out-Null
+				foreach ($item in Get-ChildItem -LiteralPath $EmbeddedFilesPath -Force) {
+					Copy-Item -LiteralPath $item.FullName -Destination $embeddedDestination -Recurse -Force
+				}
+			}
+
+			Push-Location $sourceRoot
+			$locationPushed = $true
+			$requirements = @()
+			foreach ($requiredModule in ($MinimumModules.Keys | Sort-Object)) {
+				$requirements += "$requiredModule@$($MinimumModules[$requiredModule])"
+			}
+			if ($requirements.Count -gt 0) {
+				Invoke-TlcNativeCommand -FilePath $go -ArgumentList (@('get') + $requirements) `
+					-FailureMessage 'verified Go dependency remediation failed'
+			}
+		} else {
+			Push-Location $buildRoot
+			$locationPushed = $true
+			Invoke-TlcNativeCommand -FilePath $go `
+				-ArgumentList @('mod', 'init', "toolchains.local/patched-$([guid]::NewGuid().ToString('n'))") `
+				-FailureMessage 'Go module initialization failed'
+
+			$requirements = @("$Module@$Version")
+			foreach ($requiredModule in ($MinimumModules.Keys | Sort-Object)) {
+				$requirements += "$requiredModule@$($MinimumModules[$requiredModule])"
+			}
+			Invoke-TlcNativeCommand -FilePath $go -ArgumentList (@('get') + $requirements) `
+				-FailureMessage 'verified Go source resolution failed'
 		}
-		Invoke-TlcNativeCommand -FilePath $go -ArgumentList (@('get') + $requirements) `
-			-FailureMessage 'verified Go source resolution failed'
 
 		foreach ($requiredModule in ($MinimumModules.Keys | Sort-Object)) {
 			$minimumVersion = [string]$MinimumModules[$requiredModule]
@@ -168,7 +265,7 @@ function Invoke-TlcVerifiedGoCommandBuild {
 
 		if ($ForbiddenPackagePrefixes.Count -gt 0) {
 			$dependencyText = Invoke-TlcNativeCommand -FilePath $go `
-				-ArgumentList @('list', '-deps', $Command) `
+				-ArgumentList @('list', '-deps', $buildCommand) `
 				-FailureMessage 'verified Go dependency inspection failed' -PassThru
 			$dependencies = @($dependencyText -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 			$forbiddenDependencies = @()
@@ -188,7 +285,7 @@ function Invoke-TlcVerifiedGoCommandBuild {
 		$buildArguments = @('build', '-trimpath')
 		if (-not [string]::IsNullOrWhiteSpace($BuildTags)) { $buildArguments += @('-tags', $BuildTags) }
 		if (-not [string]::IsNullOrWhiteSpace($LdFlags)) { $buildArguments += @('-ldflags', $LdFlags) }
-		$buildArguments += @('-o', $OutputPath, $Command)
+		$buildArguments += @('-o', $OutputPath, $buildCommand)
 		Invoke-TlcNativeCommand -FilePath $go -ArgumentList $buildArguments `
 			-FailureMessage 'verified Go command build failed'
 		if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { throw "Go command build did not produce $OutputPath" }
@@ -359,6 +456,7 @@ function Get-GitHubTag {
 		return @{
 			Name = $Latest.item.name
 			Version = $Latest.version
+			CommitSha = [string]$Latest.item.commit.sha
 		}
 	}
 	Write-Error "Failed to find a GitHub Tag for $Owner $Repo"

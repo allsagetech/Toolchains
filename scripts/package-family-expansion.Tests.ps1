@@ -223,6 +223,125 @@ Describe 'Verified Go builds and network cache behavior' {
 		Should -Invoke Invoke-TlcNativeCommand -Times 4 -Exactly
 	}
 
+	It 'builds from checksum-verified module source with contained embedded files' {
+		$sourceDir = Join-Path $script:TempRoot 'module-source'
+		$embeddedDir = Join-Path $script:TempRoot 'embedded'
+		New-Item -ItemType Directory -Path (Join-Path $sourceDir 'cmd/tool') -Force | Out-Null
+		New-Item -ItemType Directory -Path $embeddedDir -Force | Out-Null
+		[IO.File]::WriteAllText((Join-Path $sourceDir 'go.mod'), "module example.test/tool`n")
+		[IO.File]::WriteAllText((Join-Path $sourceDir 'cmd/tool/main.go'), "package main`nfunc main() {}`n")
+		[IO.File]::WriteAllText((Join-Path $embeddedDir 'manifest.yaml'), 'fixture')
+		$script:EmbeddedFilesObserved = $false
+		Mock Get-TlcApplicationPath { 'go-fixture' }
+		Mock Invoke-TlcNativeCommand {
+			if ($ArgumentList[0] -eq 'mod' -and $ArgumentList[1] -eq 'download') {
+				return @{
+					Path = 'example.test/tool'
+					Version = 'v2.0.0'
+					Sum = 'h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+					GoModSum = 'h1:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
+					Dir = $sourceDir
+				} | ConvertTo-Json
+			}
+			if ($ArgumentList[0] -eq 'list') { return 'v1.3.0' }
+			if ($ArgumentList[0] -eq 'build') {
+				$script:EmbeddedFilesObserved = Test-Path -LiteralPath (Join-Path (Get-Location) 'cmd/tool/manifests/manifest.yaml') -PathType Leaf
+				$index = [Array]::IndexOf([object[]]$ArgumentList, '-o')
+				[IO.File]::WriteAllText([string]$ArgumentList[$index + 1], 'binary')
+			}
+		}
+		$output = Join-Path $env:TLC_PKG_ROOT 'tool.exe'
+		Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+			-Command example.test/tool/cmd/tool -OutputPath $output `
+			-MinimumModules @{ 'example.test/dependency' = 'v1.2.0' } -UseModuleSource `
+			-EmbeddedFilesPath $embeddedDir -EmbeddedFilesRelativeDestination 'cmd/tool/manifests'
+		Test-Path -LiteralPath $output -PathType Leaf | Should -BeTrue
+		$script:EmbeddedFilesObserved | Should -BeTrue
+		Should -Invoke Invoke-TlcNativeCommand -Times 4 -Exactly
+		Should -Invoke Invoke-TlcNativeCommand -Times 1 -Exactly -ParameterFilter {
+			$ArgumentList[0] -eq 'build' -and $ArgumentList[-1] -eq './cmd/tool'
+		}
+
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+				-Command example.test/tool/cmd/tool -OutputPath $output -UseModuleSource `
+				-EmbeddedFilesPath $embeddedDir -EmbeddedFilesRelativeDestination '../outside'
+		} | Should -Throw '*destination is unsafe*'
+	}
+
+	It 'builds from an exact verified Git source commit' {
+		$expectedCommit = 'd' * 40
+		Mock Get-TlcApplicationPath {
+			if ($Name -eq 'git') { return 'git-fixture' }
+			return 'go-fixture'
+		}
+		Mock Invoke-TlcNativeCommand {
+			if ($FilePath -eq 'git-fixture' -and $ArgumentList[0] -eq 'clone') {
+				$sourceRoot = [string]$ArgumentList[-1]
+				New-Item -ItemType Directory -Path (Join-Path $sourceRoot 'cmd/tool') -Force | Out-Null
+				[IO.File]::WriteAllText((Join-Path $sourceRoot 'go.mod'), "module example.test/tool`n")
+				[IO.File]::WriteAllText((Join-Path $sourceRoot 'cmd/tool/main.go'), "package main`nfunc main() {}`n")
+				return
+			}
+			if ($FilePath -eq 'git-fixture' -and $ArgumentList[2] -eq 'rev-parse') { return $expectedCommit }
+			if ($ArgumentList[0] -eq 'list') { return 'v1.3.0' }
+			if ($ArgumentList[0] -eq 'build') {
+				$index = [Array]::IndexOf([object[]]$ArgumentList, '-o')
+				[IO.File]::WriteAllText([string]$ArgumentList[$index + 1], 'binary')
+			}
+		}
+		$output = Join-Path $env:TLC_PKG_ROOT 'git-tool.exe'
+		Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+			-Command example.test/tool/cmd/tool -OutputPath $output `
+			-MinimumModules @{ 'example.test/dependency' = 'v1.2.0' } -UseGitSource `
+			-GitRepository 'https://github.com/owner/tool' -GitRef v2.0.0 -GitCommit $expectedCommit
+		Test-Path -LiteralPath $output -PathType Leaf | Should -BeTrue
+		Should -Invoke Invoke-TlcNativeCommand -Times 5 -Exactly
+		Should -Invoke Invoke-TlcNativeCommand -Times 1 -Exactly -ParameterFilter {
+			$FilePath -eq 'git-fixture' -and $ArgumentList[0] -eq 'clone' -and $ArgumentList[4] -eq 'v2.0.0'
+		}
+
+		{ Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 -Command example.test/tool `
+			-OutputPath $output -UseModuleSource -UseGitSource -GitRepository 'https://github.com/owner/tool' `
+			-GitRef v2.0.0 -GitCommit $expectedCommit } | Should -Throw '*mutually exclusive*'
+	}
+
+	It 'rejects incomplete source-build inputs before invoking build tools' {
+		$output = Join-Path $env:TLC_PKG_ROOT 'invalid-source.exe'
+		$embeddedDir = Join-Path $env:TLC_PKG_ROOT 'embedded-input'
+		New-Item -ItemType Directory -Path $embeddedDir -Force | Out-Null
+		Mock Get-TlcApplicationPath { 'go-fixture' }
+
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+				-Command example.test/tool -OutputPath $output -UseGitSource `
+				-GitRepository 'https://github.com/owner/tool'
+		} | Should -Throw '*require repository, ref, and commit together*'
+
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+				-Command example.test/tool -OutputPath $output -EmbeddedFilesPath $embeddedDir
+		} | Should -Throw '*path and relative destination must be supplied together*'
+
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+				-Command example.test/tool -OutputPath $output -EmbeddedFilesPath $embeddedDir `
+				-EmbeddedFilesRelativeDestination 'manifests'
+		} | Should -Throw '*require a source-tree build*'
+
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+				-Command example.test/tool -OutputPath $output -UseGitSource `
+				-GitRepository 'http://example.test/owner/tool' -GitRef v2.0.0 -GitCommit ('d' * 40)
+		} | Should -Throw '*not a supported GitHub HTTPS repository*'
+
+		{
+			Invoke-TlcVerifiedGoCommandBuild -Module example.test/tool -Version v2.0.0 `
+				-Command example.test/tool -OutputPath $output -UseGitSource `
+				-GitRepository 'https://github.com/owner/tool' -GitRef v2.0.0 -GitCommit 'not-a-sha'
+		} | Should -Throw '*not a full SHA-1*'
+	}
+
 	It 'rejects a forbidden package in a verified Go command graph' {
 		Mock Get-TlcApplicationPath { 'go-fixture' }
 		Mock Invoke-TlcNativeCommand {
