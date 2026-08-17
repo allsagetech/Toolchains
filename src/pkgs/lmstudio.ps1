@@ -91,7 +91,22 @@ function global:Install-TlcPackage {
 
 function global:Test-TlcPackageInstall {
     Toolchain exec (Get-TlcPkgUri) {
-        lmstudio --help
+		$lmstudioShim = Get-Command 'lmstudio.cmd' -CommandType Application -ErrorAction Stop | Select-Object -First 1
+		$lmstudioRoot = Join-Path (Split-Path -Parent $lmstudioShim.Source) 'node_modules\lmstudio'
+		$manifestPath = Join-Path $lmstudioRoot 'package.json'
+		if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+			throw "LM Studio package manifest not found: $manifestPath"
+		}
+		$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+		if ($manifest.name -ne 'lmstudio' -or -not $manifest.bin.lmstudio) {
+			throw 'LM Studio package manifest does not expose the expected CLI shim.'
+		}
+		$entrypoint = Join-Path $lmstudioRoot ([string]$manifest.bin.lmstudio)
+		if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) {
+			throw "LM Studio CLI entrypoint not found: $entrypoint"
+		}
+		node --check $entrypoint
+		if ($LASTEXITCODE -ne 0) { throw "LM Studio CLI syntax check failed with exit code $LASTEXITCODE." }
 		npm --version
     }
 }

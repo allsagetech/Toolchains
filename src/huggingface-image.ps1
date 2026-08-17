@@ -157,10 +157,9 @@ function Invoke-HfModelLayeredDockerBuild {
 	}
 	$dockerArguments += @($pkgRoot)
 
-	& docker @dockerArguments
-	if ($LASTEXITCODE -ne 0) {
-		throw "docker build failed with exit code $LASTEXITCODE for $Tag"
-	}
+	$docker = Get-TlcApplicationPath -Name 'docker'
+	Invoke-TlcNativeCommand -FilePath $docker -ArgumentList $dockerArguments `
+		-FailureMessage "docker build failed for $Tag"
 }
 
 function Install-HfModelPackage {

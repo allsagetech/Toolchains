@@ -59,10 +59,14 @@ Describe 'Hugging Face layered image helpers' {
 		[IO.File]::WriteAllText((Join-Path $script:TempRoot '.tlc'), '{"env":{}}')
 		$dockerfile = Join-Path $script:TempRoot 'Dockerfile.hf-model-owner-model'
 		[IO.File]::WriteAllText($dockerfile, 'FROM scratch')
-		$script:DockerExit = 0
-		function global:docker { $global:LASTEXITCODE = $script:DockerExit }
+		Mock Get-TlcApplicationPath { 'docker' } -ParameterFilter { $Name -eq 'docker' }
+		Mock Invoke-TlcNativeCommand {}
 		{ Invoke-HfModelLayeredDockerBuild -Tag 'example.test/model:1' -DockerfilePath $dockerfile } | Should -Not -Throw
-		$script:DockerExit = 7
+		Should -Invoke Invoke-TlcNativeCommand -Times 1 -Exactly -ParameterFilter {
+			$FilePath -eq 'docker' -and @($ArgumentList)[0] -eq 'build' -and
+			$FailureMessage -eq 'docker build failed for example.test/model:1'
+		}
+		Mock Invoke-TlcNativeCommand { throw 'docker build failed for example.test/model:1 (exit code 7).' }
 		{ Invoke-HfModelLayeredDockerBuild -Tag 'example.test/model:1' -DockerfilePath $dockerfile } | Should -Throw '*docker build failed*7*'
 		Remove-Item -LiteralPath $dockerfile
 		{ Invoke-HfModelLayeredDockerBuild -Tag 'tag' -DockerfilePath $dockerfile } | Should -Throw '*Layered Dockerfile not found*'

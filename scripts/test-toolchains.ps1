@@ -488,6 +488,9 @@ function Test-ProductionReadinessPolicies {
 	$lmStudioText = Get-Content -LiteralPath .\src\pkgs\lmstudio.ps1 -Raw
 	Assert-True ($lmStudioConfig.BuildRevision -eq 1 -and $lmStudioConfig.NpmVersion -eq '12.0.2') 'LM Studio does not carry a republishable hardened npm bundle.'
 	Assert-True ($lmStudioText -match 'Install-TlcPinnedNpmArchive' -and $lmStudioText -match 'npm --version') 'LM Studio does not install and exercise the verified npm replacement.'
+	Assert-True ($lmStudioText -match 'node --check' -and $lmStudioText -match 'package\.json' -and $lmStudioText -notmatch 'lmstudio --help') 'LM Studio validation is not safe for a headless runner.'
+	$hfImageText = Get-Content -LiteralPath .\src\huggingface-image.ps1 -Raw
+	Assert-True ($hfImageText -match 'Invoke-TlcNativeCommand[\s\S]+?docker build failed') 'Hugging Face image builds expose normal BuildKit stderr as package errors.'
 	$vscodeConfig = (Read-TlcPackageDescriptor -Path .\src\pkgs\vscode.ps1).Config
 	$vscodeText = Get-Content -LiteralPath .\src\pkgs\vscode.ps1 -Raw
 	Assert-True ($vscodeConfig.BuildRevision -eq 1 -and $vscodeConfig.Vex -eq '.github/vex/vscode.openvex.json') 'VS Code does not carry the remediated dependency revision and scoped VEX evidence.'
