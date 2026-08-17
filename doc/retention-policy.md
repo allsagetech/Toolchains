@@ -23,3 +23,10 @@ Repository administrators should configure the repository-wide Actions
 log/artifact setting to 90 days, the maximum for a public repository. Static
 policy tests require every `upload-artifact` step to declare its narrower
 retention explicitly and reject values above 90 days.
+
+On the first day of each month, the recovery drill verifies a real immutable
+package signature, SBOM, and provenance through the rollback path in `WhatIf`
+mode. The same workflow authenticates to Docker Hub and inventories staging,
+orphaned attachment, and quarantined-tag cleanup in `DryRun` mode. Neither drill
+moves an alias or deletes a tag, and both evidence reports are retained for 90
+days.

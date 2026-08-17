@@ -18,6 +18,7 @@
 - Add daily and post-rescan signed package-health monitoring with retained reports and automatically managed GitHub alert issues.
 - Add persistent health-state history, last-clean-scan and quarantine-duration metrics, a seven-day remediation SLO, and duplicate alert consolidation.
 - Add signature-, SBOM-, and provenance-verified package alias rollback plus three-platform Toolchain consumer rollback.
+- Add monthly non-mutating rollback and retention rehearsals with 90-day evidence.
 
 ### Security
 

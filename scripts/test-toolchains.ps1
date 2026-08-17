@@ -318,6 +318,7 @@ function Test-ProductionReadinessPolicies {
 	$consumerWorkflowText = Get-Content -LiteralPath .\.github\workflows\consumer-compatibility.yml -Raw
 	$monitorWorkflowText = Get-Content -LiteralPath .\.github\workflows\monitor-package-health.yml -Raw
 	$rollbackWorkflowText = Get-Content -LiteralPath .\.github\workflows\rollback-package.yml -Raw
+	$recoveryDrillWorkflowText = Get-Content -LiteralPath .\.github\workflows\recovery-drills.yml -Raw
 	$rollbackScriptText = Get-Content -LiteralPath .\scripts\rollback-package-tag.ps1 -Raw
 	$rescanPlanText = Get-Content -LiteralPath .\scripts\export-rescan-matrix.ps1 -Raw
 	$rescanWorkflowText = Get-Content -LiteralPath .\.github\workflows\rescan-published.yml -Raw
@@ -351,6 +352,9 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($workflowText -match 'merge-package-health-scan-results\.ps1' -and $workflowText -match '\.health\.json') 'Package publication does not preserve prior scan freshness and merge current scan evidence.'
 	Assert-True ($workflowText -match 'add-package-health-history\.ps1' -and $rescanWorkflowText -match 'add-package-health-history\.ps1') 'Package publication and rescans do not persist package-health state history.'
 	Assert-True ($rollbackWorkflowText -match "confirmation == 'ROLLBACK'") 'Package rollback lacks explicit operator confirmation.'
+	Assert-True ($recoveryDrillWorkflowText -match "cron:\s*'43 6 1 \* \*'" -and $recoveryDrillWorkflowText -match 'rollback-package-tag\.ps1[\s\S]+-WhatIf') 'Rollback recovery is not rehearsed monthly in non-mutating mode.'
+	Assert-True ($recoveryDrillWorkflowText -match 'Remove-DockerHubStagingTags\.ps1[\s\S]+-DryRun' -and $recoveryDrillWorkflowText -match 'Remove-DockerHubQuarantinedTags\.ps1[\s\S]+-DryRun') 'Retention cleanup is not rehearsed in dry-run mode.'
+	Assert-True (@([regex]::Matches($recoveryDrillWorkflowText, 'retention-days:\s*90')).Count -eq 2) 'Recovery drill evidence is not retained for 90 days.'
 	foreach ($evidence in @("cosign @Arguments", "'spdxjson'", "'slsaprovenance'", 'imagetools create', 'AliasTag must be')) {
 		Assert-True ($rollbackScriptText -match [regex]::Escape($evidence)) "Package rollback is missing evidence gate: $evidence"
 	}
