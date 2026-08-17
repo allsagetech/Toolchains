@@ -5,53 +5,42 @@ SPDX-License-Identifier: MPL-2.0
 #>
 
 $global:TlcPackageConfig = @{
-    Name = 'zarf'
+	Name = 'zarf'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	PatchedContainerdVersion = 'v1.7.33'
 }
 
 function global:Install-TlcPackage {
-    $Params = @{
-        Owner      = 'zarf-dev'
-        Repo       = 'zarf'
-        TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
-    }
-    $Latest = Get-GitHubTag @Params
+	$Params = @{
+		Owner = 'zarf-dev'
+		Repo = 'zarf'
+		TagPattern = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+	}
+	$Latest = Get-GitHubTag @Params
+	$upstreamVersion = $Latest.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $packageVersion.ToString()
+	if ($TlcPackageConfig.UpToDate) {
+		return
+	}
 
-    $TlcPackageConfig.UpToDate = -not $Latest.Version.LaterThan($TlcPackageConfig.Latest)
-    $TlcPackageConfig.Version  = $Latest.Version.ToString()
+	$ldflags = "-s -w -X github.com/zarf-dev/zarf/src/config.CLIVersion=$($Latest.Name)"
+	Invoke-TlcVerifiedGoCommandBuild `
+		-Module 'github.com/zarf-dev/zarf' `
+		-Version ([string]$Latest.Name) `
+		-Command 'github.com/zarf-dev/zarf' `
+		-OutputPath (Get-TlcPkgPath 'zarf.exe') `
+		-MinimumModules @{ 'github.com/containerd/containerd' = $TlcPackageConfig.PatchedContainerdVersion } `
+		-GoToolchain $TlcPackageConfig.GoToolchain `
+		-LdFlags $ldflags
 
-    if ($TlcPackageConfig.UpToDate) {
-        return
-    }
-
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for zarf.'
-    }
-
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT ("zarf-{0}" -f $Latest.Version)
-    if (-not (Test-Path $InstallRoot)) {
-        New-Item -ItemType Directory -Path $InstallRoot | Out-Null
-    }
-
-    $Tag       = $Latest.name
-    $AssetName = "zarf_${Tag}_Windows_amd64.exe"
-    $Download  = "https://github.com/zarf-dev/zarf/releases/download/$Tag/$AssetName"
-
-	$ExePath = Join-Path $InstallRoot 'zarf.exe'
-	$ChecksumUrl = "https://github.com/zarf-dev/zarf/releases/download/$Tag/checksums.txt"
-	$ExpectedSha256 = Get-TlcRemoteSha256 -ChecksumUri $ChecksumUrl -AssetName $AssetName -Headers (Get-TlcGitHubHeaders)
-
-	Write-Host "Downloading Zarf $Tag from $Download"
-	Invoke-TlcWebRequest -Uri $Download -OutFile $ExePath -ExpectedSha256 $ExpectedSha256
-
-    if (-not (Test-Path $ExePath)) {
-        throw "Failed to download Zarf binary from $Download"
-    }
-
-    Write-TlcVars @{
-        env = @{
-            path = $InstallRoot
-        }
-    }
+	Write-TlcVars @{
+		env = @{
+			path = Get-TlcPkgRoot
+		}
+	}
 }
 
 function global:Test-TlcPackageInstall {

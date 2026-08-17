@@ -687,6 +687,12 @@ function Test-ProductionReadinessPolicies {
 	}
 	Assert-True ($ghText -match 'internal/build\.Version=\$upstreamVersion') 'GitHub CLI source build does not preserve the upstream version contract.'
 	Assert-True ($ghText -match 'BuildRevision = 1') 'GitHub CLI patched source build does not carry a republishable package revision.'
+	$zarfText = Get-Content -LiteralPath .\src\pkgs\zarf.ps1 -Raw
+	Assert-True ($zarfText -match 'Invoke-TlcVerifiedGoCommandBuild') 'Zarf still packages the vulnerable upstream binary.'
+	Assert-True ($zarfText -match "GoToolchain = 'go1\.26\.6'") 'Zarf does not pin the fixed Go toolchain.'
+	Assert-True ($zarfText -match "PatchedContainerdVersion = 'v1\.7\.33'") 'Zarf does not require the fixed containerd version.'
+	Assert-True ($zarfText -match 'config\.CLIVersion=\$\(\$Latest\.Name\)') 'Zarf source build does not preserve the upstream version contract.'
+	Assert-True ($zarfText -match 'BuildRevision = 1') 'Zarf patched source build does not carry a republishable package revision.'
 	foreach ($kubectlScript in @('.\src\pkgs\kubectl.ps1', '.\src\pkgs\kubectl-linux.ps1')) {
 		$kubectlText = Get-Content -LiteralPath $kubectlScript -Raw
 		Assert-True ($kubectlText -match 'Initialize-TlcKubectlPackage') "$kubectlScript bypasses the shared verified source build."
