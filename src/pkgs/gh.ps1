@@ -6,54 +6,51 @@ SPDX-License-Identifier: MPL-2.0
 
 $global:TlcPackageConfig = @{
     Name = 'gh'
+	GoToolchain = 'go1.26.6'
+	BuildRevision = 1
+	PatchedCryptoVersion = 'v0.54.0'
+	PatchedNetVersion = 'v0.56.0'
+	PatchedTextVersion = 'v0.40.0'
+	PatchedGrpcVersion = 'v1.82.1'
+	PatchedRekorVersion = 'v1.5.3'
 }
 
 function global:Install-TlcPackage {
-
-    if (-not $env:TLC_PKG_ROOT) {
-        throw 'TLC_PKG_ROOT is not set; cannot determine install root for gh.'
-    }
-
     $Params = @{
         Owner        = 'cli'
         Repo         = 'cli'
-        AssetPattern = 'gh_.*_windows_amd64\.zip'
         TagPattern   = '^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
     }
 
-    $Asset = Get-GitHubRelease @Params
-
-    $TlcPackageConfig.UpToDate = -not $Asset.Version.LaterThan($TlcPackageConfig.Latest)
-    $TlcPackageConfig.Version  = $Asset.Version.ToString()
+	$Latest = Get-GitHubTag @Params
+	$upstreamVersion = $Latest.Version.ToString()
+	$packageVersion = [TlcSemanticVersion]::new("$upstreamVersion+$($TlcPackageConfig.BuildRevision)")
+	$TlcPackageConfig.UpToDate = -not $packageVersion.LaterThan($TlcPackageConfig.Latest)
+	$TlcPackageConfig.Version = $packageVersion.ToString()
 
     if ($TlcPackageConfig.UpToDate) {
         return
     }
 
-    $InstallRoot = Join-Path $env:TLC_PKG_ROOT ("gh-{0}" -f $Asset.Version)
-
-    if (-not (Test-Path $InstallRoot)) {
-        New-Item -ItemType Directory -Path $InstallRoot | Out-Null
-    }
-
-    $Params = @{
-        AssetName = $Asset.Name
-        AssetURL  = $Asset.URL
-    }
-    Install-BuildTool @Params
-
-    $GhExe = Get-ChildItem -Path (Get-TlcPkgRoot) -Recurse -Include 'gh.exe' |
-        Select-Object -First 1
-
-    if (-not $GhExe) {
-        throw "Could not find gh.exe after extracting GitHub CLI archive."
-    }
-
-    Copy-Item $GhExe.FullName -Destination (Join-Path $InstallRoot 'gh.exe') -Force
+	$ldflags = "-s -w -X github.com/cli/cli/v2/internal/build.Version=$upstreamVersion"
+	Invoke-TlcVerifiedGoCommandBuild `
+		-Module 'github.com/cli/cli/v2' `
+		-Version ([string]$Latest.Name) `
+		-Command 'github.com/cli/cli/v2/cmd/gh' `
+		-OutputPath (Get-TlcPkgPath 'gh.exe') `
+		-MinimumModules @{
+			'github.com/sigstore/rekor' = $TlcPackageConfig.PatchedRekorVersion
+			'golang.org/x/crypto' = $TlcPackageConfig.PatchedCryptoVersion
+			'golang.org/x/net' = $TlcPackageConfig.PatchedNetVersion
+			'golang.org/x/text' = $TlcPackageConfig.PatchedTextVersion
+			'google.golang.org/grpc' = $TlcPackageConfig.PatchedGrpcVersion
+		} `
+		-GoToolchain $TlcPackageConfig.GoToolchain `
+		-LdFlags $ldflags
 
     Write-TlcVars @{
         env = @{
-            path = $InstallRoot
+			path = Get-TlcPkgRoot
         }
     }
 }
