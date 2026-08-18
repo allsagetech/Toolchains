@@ -1324,7 +1324,7 @@ jobs:
   health-catalog-plan:
     name: Plan signed package health catalog
     needs: [init, validate, release, platform-indexes]
-    if: ${{ always() && needs.init.result == 'success' && needs.validate.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.platform-indexes.result == 'success' || needs.platform-indexes.result == 'skipped') && github.ref == 'refs/heads/main' }}
+    if: ${{ always() && needs.init.result == 'success' && needs.validate.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'failure' || needs.release.result == 'skipped') && (needs.platform-indexes.result == 'success' || needs.platform-indexes.result == 'skipped') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -1379,7 +1379,7 @@ jobs:
             $global:LASTEXITCODE = 0
           }
           $scanResultsPath = Join-Path $directory 'scan-results.json'
-          ./scripts/merge-package-health-scan-results.ps1 -PriorHealthPath $priorPath -EvidenceRoot $evidenceRoot -OutputPath $scanResultsPath
+          ./scripts/merge-package-health-scan-results.ps1 -PriorHealthPath $priorPath -EvidenceRoot $evidenceRoot -OutputPath $scanResultsPath -CurrentResultsAuthoritative
           $catalogPath = Join-Path $directory 'catalog.json'
           ./scripts/new-package-health-catalog.ps1 -OutputPath $catalogPath -Repository $env:TLC_DOCKER_REPO -ScanResultsPath $scanResultsPath
           ./scripts/add-package-health-history.ps1 -CatalogPath $catalogPath -PriorHealthPath $priorPath

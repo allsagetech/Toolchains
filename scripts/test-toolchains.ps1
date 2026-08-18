@@ -350,6 +350,8 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($monitorWorkflowText -match 'Select-Object -Skip 1' -and $monitorWorkflowText -match 'Consolidated into') 'Health monitoring does not consolidate duplicate alert issues.'
 	Assert-True ($monitorWorkflowText -match 'retention-days:\s*90') 'Health monitoring evidence is not retained for 90 days.'
 	Assert-True ($workflowText -match 'merge-package-health-scan-results\.ps1' -and $workflowText -match '\.health\.json') 'Package publication does not preserve prior scan freshness and merge current scan evidence.'
+	Assert-True ($workflowText -match 'merge-package-health-scan-results\.ps1[^\r\n]+-CurrentResultsAuthoritative') 'Clean exact-image release evidence cannot recover a previously blocked package.'
+	Assert-True ($workflowText -match "health-catalog-plan:[\s\S]+needs\.release\.result == 'failure'") 'Partial package release failures prevent successful scan evidence from reaching the signed health catalog.'
 	Assert-True ($workflowText -match 'add-package-health-history\.ps1' -and $rescanWorkflowText -match 'add-package-health-history\.ps1') 'Package publication and rescans do not persist package-health state history.'
 	Assert-True ($rollbackWorkflowText -match "confirmation == 'ROLLBACK'") 'Package rollback lacks explicit operator confirmation.'
 	Assert-True ($recoveryDrillWorkflowText -match "cron:\s*'43 6 1 \* \*'" -and $recoveryDrillWorkflowText -match 'rollback-package-tag\.ps1[\s\S]+-WhatIf') 'Rollback recovery is not rehearsed monthly in non-mutating mode.'
