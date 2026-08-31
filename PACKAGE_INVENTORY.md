@@ -2,8 +2,8 @@
 
 This file is generated from package descriptors. Run `./scripts/export-package-inventory.ps1` after changing `src/pkgs`.
 
-- Descriptors: 103
-- Publication eligible: 100
+- Descriptors: 104
+- Publication eligible: 101
 - Quarantined: 3
 
 | Package | Canonical name | Platform | Tier | Publication | Source |
@@ -88,6 +88,7 @@ This file is generated from package descriptors. Run `./scripts/export-package-i
 | qwen2.5-0.5b-instruct | qwen2.5-0.5b-instruct | linux/amd64 | model-small | eligible | `src/pkgs/qwen2.5-0.5b-instruct.ps1` |
 | qwen2.5-coder-7b-instruct | qwen2.5-coder-7b-instruct | linux/amd64 | model-large | eligible | `src/pkgs/qwen2.5-coder-7b-instruct.ps1` |
 | qwen3-0.6b | qwen3-0.6b | linux/amd64 | model-small | eligible | `src/pkgs/qwen3-0.6b.ps1` |
+| recaf | recaf | windows/amd64 | tooling | eligible | `src/pkgs/recaf.ps1` |
 | regctl | regctl | windows/amd64 | tooling | eligible | `src/pkgs/regctl.ps1` |
 | rust | rust | windows/amd64 | tooling | eligible | `src/pkgs/rust.ps1` |
 | smollm2-135m-instruct | smollm2-135m-instruct | linux/amd64 | model-small | eligible | `src/pkgs/smollm2-135m-instruct.ps1` |
