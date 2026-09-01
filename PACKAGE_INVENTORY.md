@@ -2,8 +2,8 @@
 
 This file is generated from package descriptors. Run `./scripts/export-package-inventory.ps1` after changing `src/pkgs`.
 
-- Descriptors: 104
-- Publication eligible: 101
+- Descriptors: 106
+- Publication eligible: 103
 - Quarantined: 3
 
 | Package | Canonical name | Platform | Tier | Publication | Source |
@@ -109,6 +109,8 @@ This file is generated from package descriptors. Run `./scripts/export-package-i
 | websocat | websocat | windows/amd64 | tooling | eligible | `src/pkgs/websocat.ps1` |
 | windows-terminal | windows-terminal | windows/amd64 | tooling | eligible | `src/pkgs/windows-terminal.ps1` |
 | yarn | yarn | windows/amd64 | tooling | eligible | `src/pkgs/yarn/yarn.ps1` |
+| yq | yq | windows/amd64 | tooling | eligible | `src/pkgs/yq.ps1` |
+| yq-linux | yq | linux/amd64 | tooling | eligible | `src/pkgs/yq-linux.ps1` |
 | zarf | zarf | windows/amd64 | tooling | eligible | `src/pkgs/zarf.ps1` |
 | zig | zig | windows/amd64 | tooling | eligible | `src/pkgs/zig.ps1` |
 | zstd | zstd | windows/amd64 | tooling | eligible | `src/pkgs/zstd.ps1` |

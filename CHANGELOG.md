@@ -12,6 +12,7 @@
 - Add signed package-health catalog publication, weekly durable-tag rescans, and clean consumer/cluster certification workflows.
 - Add canonical signed multi-platform OCI indexes while retaining platform-specific compatibility aliases.
 - Add checksum-verified Windows and Linux packages for Cosign, ORAS, Syft, Trivy, Crane, Talosctl, Flux, Argo CD, Stern, and Kubeseal.
+- Add integrity-checked Windows and Linux packages for Mike Farah's `yq` YAML processor.
 - Add deterministic offline release rehearsals, catalog performance budgets, and automated container-base digest refresh pull requests.
 - Add automated immutable Toolchain consumer promotion with one coherent manifest/workflow pin and real Windows PowerShell 5.1, Windows PowerShell 7, and Linux PowerShell 7 package-consumer tests.
 - Raise the production-code coverage gate to 85% with lifecycle, integrity, Docker publication, release pagination, cache, subprocess, model-install, and isolated-runtime regression tests.

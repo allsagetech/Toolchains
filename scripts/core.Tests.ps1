@@ -135,6 +135,21 @@ Describe 'Package descriptor isolation and policy' {
 		Get-Command Install-TlcPackage -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
 	}
 
+	It 'defines yq as one integrity-checked cross-platform package family' {
+		$paths = @(
+			(Join-Path $script:RepoRoot 'src/pkgs/yq.ps1'),
+			(Join-Path $script:RepoRoot 'src/pkgs/yq-linux.ps1')
+		)
+		$descriptors = @(Read-TlcPackageDescriptors -Path $paths)
+		$descriptors.Count | Should -Be 2
+		$descriptors[0].Config.Name | Should -Be 'yq'
+		$descriptors[0].Config.CanonicalName | Should -Be 'yq'
+		$descriptors[0].Config.Platform | Should -Be 'windows/amd64'
+		$descriptors[1].Config.Name | Should -Be 'yq-linux'
+		$descriptors[1].Config.CanonicalName | Should -Be 'yq'
+		$descriptors[1].Config.Platform | Should -Be 'linux/amd64'
+	}
+
 	It 'runs a complete lifecycle in the isolated runtime' {
 		$descriptor = Join-Path $script:TempRoot 'fixture.ps1'
 		[IO.File]::WriteAllText($descriptor, @'
