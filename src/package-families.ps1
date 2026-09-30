@@ -689,9 +689,9 @@ function Initialize-TlcKubectlPackage {
 		Platform = if ($Linux) { 'linux/amd64' } else { 'windows/amd64' }
 		BuildRevision = 1
 		GoToolchain = 'go1.26.6'
-		KubernetesNetVersion = 'v0.56.0'
-		KubernetesSysVersion = 'v0.46.0'
-		KubernetesTextVersion = 'v0.39.0'
+		KubernetesNetVersion = 'v0.57.0'
+		KubernetesSysVersion = 'v0.47.0'
+		KubernetesTextVersion = 'v0.40.0'
 		IsLinux = [bool]$Linux
 		SourceEntrypoint = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'assets\kubectl\main.go'))
 	}

@@ -14,6 +14,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Get-DockerHubReachableDigests.ps1')
 $ProgressPreference = 'SilentlyContinue'
 $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
@@ -160,6 +161,9 @@ foreach ($item in @($inventory)) {
 	$digest = [string]$item.digest
 	if ($digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Docker Hub did not report a usable digest for durable tag '$name'." }
 	$remainingDurableDigests[$digest] = $true
+	foreach ($reachableDigest in @(Get-DockerHubReachableDigests -Item $item -Repository $Repository)) {
+		$remainingDurableDigests[$reachableDigest] = $true
+	}
 }
 
 $attachmentCandidates = [Collections.Generic.List[string]]::new()

@@ -686,9 +686,9 @@ function Test-ProductionReadinessPolicies {
 	Assert-True ($goPackageText -match 'platform_root_key\.pem' -and $goPackageText -match 'Remove-Item -LiteralPath \$testPrivateKey') 'Go packages retain a bundled crypto/x509 test private key that blocks secret scanning.'
 	Assert-True ($familyText -match 'Not Found\|no upstream hash') 'Shared Adoptium package logic does not skip unavailable optional x86 assets under strict verification.'
 	foreach ($patchedModule in @(
-		@{ Module = 'golang.org/x/net'; Version = 'v0.56.0' },
-		@{ Module = 'golang.org/x/sys'; Version = 'v0.46.0' },
-		@{ Module = 'golang.org/x/text'; Version = 'v0.39.0' }
+		@{ Module = 'golang.org/x/net'; Version = 'v0.57.0' },
+		@{ Module = 'golang.org/x/sys'; Version = 'v0.47.0' },
+		@{ Module = 'golang.org/x/text'; Version = 'v0.40.0' }
 	)) {
 		Assert-True ($familyText -match [regex]::Escape($patchedModule.Module)) "Shared kubectl source build omits dependency: $($patchedModule.Module)"
 		Assert-True ($familyText -match [regex]::Escape($patchedModule.Version)) "Shared kubectl source build does not pin $($patchedModule.Module) to $($patchedModule.Version)."

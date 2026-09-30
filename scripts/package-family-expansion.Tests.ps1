@@ -92,12 +92,12 @@ Describe 'Expanded package family lifecycles' {
 			if ($call -eq 'list -m all') {
 				return (@(
 					'toolchains.local/test v0.0.0',
-					'k8s.io/component-base v0.34.2',
-					'k8s.io/kubectl v0.34.2',
-					'k8s.io/client-go v0.34.2',
-					'golang.org/x/net v0.56.0',
-					'golang.org/x/sys v0.46.0',
-					'golang.org/x/text v0.39.0'
+					'k8s.io/component-base v0.37.1',
+					'k8s.io/kubectl v0.37.1',
+					'k8s.io/client-go v0.37.1',
+					'golang.org/x/net v0.57.0',
+					'golang.org/x/sys v0.47.0',
+					'golang.org/x/text v0.40.0'
 				) -join [Environment]::NewLine)
 			}
 			if ($call -like 'mod download -json*') {
@@ -109,16 +109,20 @@ Describe 'Expanded package family lifecycles' {
 			}
 		}
 		Mock Get-TlcApplicationPath { 'go-fixture' }
-		Mock Invoke-TlcWebRequest { [pscustomobject]@{ Content = [Text.Encoding]::UTF8.GetBytes('v1.34.2') } }
+		Mock Invoke-TlcWebRequest { [pscustomobject]@{ Content = [Text.Encoding]::UTF8.GetBytes('v1.37.1') } }
 		Mock Toolchain {}
 		Initialize-TlcKubectlPackage -Name kubectl
 		$global:TlcPackageConfig.Latest = [TlcSemanticVersion]::new()
 		Install-TlcPackage
-		$global:TlcPackageConfig.Version | Should -Be '1.34.2+1'
+		$global:TlcPackageConfig.Version | Should -Be '1.37.1+1'
 		Test-Path -LiteralPath (Get-TlcPkgPath 'kubectl.exe') | Should -BeTrue
 		Test-TlcPackageInstall
 		Should -Invoke Toolchain -Times 1
 		Should -Invoke Invoke-TlcNativeCommand -Times 6 -Exactly
+		Should -Invoke Invoke-TlcNativeCommand -Times 1 -Exactly -ParameterFilter {
+			$ArgumentList[0] -eq 'get' -and $ArgumentList -contains 'golang.org/x/net@v0.57.0' -and
+			$ArgumentList -contains 'golang.org/x/sys@v0.47.0' -and $ArgumentList -contains 'golang.org/x/text@v0.40.0'
+		}
 	}
 
 	It 'rejects malformed kubectl upstream version text' {

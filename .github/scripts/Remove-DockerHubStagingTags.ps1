@@ -17,6 +17,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Get-DockerHubReachableDigests.ps1')
 $ProgressPreference = 'SilentlyContinue'
 $userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
@@ -153,6 +154,9 @@ foreach ($item in $inventory) {
 			$stagingCandidates += $name
 		} else {
 			$freshStagingDigests[$digest] = $true
+			foreach ($reachableDigest in $(if ($IncludeOrphanedAttachments) { @(Get-DockerHubReachableDigests -Item $item -Repository $Repository) })) {
+				$freshStagingDigests[$reachableDigest] = $true
+			}
 		}
 		continue
 	}
@@ -160,6 +164,9 @@ foreach ($item in $inventory) {
 	# Every non-staging, non-attachment tag is durable. Its digest protects the
 	# corresponding Cosign signature and attestation tags from deletion.
 	$durableDigests[$digest] = $true
+	foreach ($reachableDigest in $(if ($IncludeOrphanedAttachments) { @(Get-DockerHubReachableDigests -Item $item -Repository $Repository) })) {
+		$durableDigests[$reachableDigest] = $true
+	}
 }
 
 $attachmentCandidates = @()
