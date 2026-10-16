@@ -101,7 +101,7 @@ jobs:
             ConvertTo-Json | Set-Content -LiteralPath result.json -Encoding utf8
       - name: Upload rescan evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rescan-${{ matrix.id }}
           path: |
@@ -130,7 +130,7 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/Install-VerifiedCosign.ps1
       - name: Download rescan evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: rescan-*
           path: evidence
@@ -161,7 +161,7 @@ jobs:
           ./scripts/new-package-health-catalog.ps1 -OutputPath catalog.json -Repository $env:TLC_DOCKER_REPO -ScanResultsPath scan-results.json
           ./scripts/add-package-health-history.ps1 -CatalogPath catalog.json -PriorHealthPath prior-health.json
       - name: Upload health catalog plan
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rescan-health-catalog-plan
           path: catalog.json
@@ -184,7 +184,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Download health catalog plan
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: rescan-health-catalog-plan
           path: plan
